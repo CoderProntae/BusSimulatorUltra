@@ -141,11 +141,16 @@ func _apply_environment(night: float, day_amount: float) -> void:
 			pano.energy_multiplier = lerpf(0.06, 1.0, day_amount)
 
 	env.fog_light_color = Color(0.10, 0.14, 0.24).lerp(Color(0.72, 0.80, 0.92), day_amount)
-	# Depth fog only: volumetric fog is unsupported on the Mobile renderer.
-	env.fog_density = lerpf(0.006, 0.004, day_amount)
+
+	# Keep this in sync with World.tscn. These values are deliberately tiny:
+	# fog_density is per-metre, so 0.0012 still covers ~45% at 500 m while
+	# leaving the near field (the bus, the next junction) perfectly clear.
+	# Do NOT re-enable height fog here - fog_height_density increases fog as
+	# height DECREASES, which whites out the whole street at ground level.
+	env.fog_density = lerpf(0.0018, 0.0012, day_amount)
 	if env.volumetric_fog_enabled:
 		env.volumetric_fog_density = lerpf(0.028, 0.018, day_amount)
-	env.glow_intensity = lerpf(1.1, 0.55, day_amount)
+	env.glow_intensity = lerpf(0.7, 0.45, day_amount)
 
 
 func _apply_lamps(night: float) -> void:

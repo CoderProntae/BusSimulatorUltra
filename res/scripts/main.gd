@@ -193,7 +193,16 @@ func _apply_renderer_safe_graphics() -> void:
 		env.ssao_enabled = false
 
 	# Depth fog works on every renderer: use it to keep the sense of distance.
+	# Height fog stays OFF: fog_height_density increases fog as height
+	# DECREASES, so at street level it turns the whole view white.
 	env.fog_enabled = true
+	env.fog_height_density = 0.0
+	env.fog_sky_affect = 0.0
+
+	# The Mobile renderer only supports a low dynamic range (~2.0), so a high
+	# tonemap white point plus bloom washes the image out to a white haze.
+	env.tonemap_white = minf(env.tonemap_white, 2.0)
+	env.glow_bloom = 0.0
 
 	# Tighter shadow range = better depth precision = no shadow acne shimmer.
 	var sun: Node = world.find_child("Sun", true, false)
