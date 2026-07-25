@@ -20,8 +20,8 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
 [physics]
-3d/default_gravity=9.8
-3d/default_gravity_vector=(0, -1, 0)
+physics/3d/default_gravity=9.8
+physics/3d/default_gravity_vector=Vector3(0, -1, 0)
 
 [android]
 package/unique_name="org.bussimulator.ultra"
