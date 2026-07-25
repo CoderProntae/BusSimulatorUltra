@@ -1,4 +1,4 @@
-=============================================================================
+# =============================================================================
 # GitHub Actions workflow for building the Android APK.
 #
 # NOTE: this file could NOT be pushed to .github/workflows/build-apk.yml
