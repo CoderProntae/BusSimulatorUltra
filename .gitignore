@@ -1,0 +1,26 @@
+# Godot 4 imported cache / build artifacts
+res/.godot/
+res/.import/
+*.import.tmp
+export_presets.cfg.bak
+
+# Build outputs
+build/
+*.apk
+*.aab
+*.idsig
+*.keystore
+
+# Downloaded asset archives (CI re-downloads these)
+*.zip
+*.tpz
+godot
+Godot_v*
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+__pycache__/
