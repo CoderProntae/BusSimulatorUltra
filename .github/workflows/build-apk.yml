@@ -37,7 +37,11 @@ jobs:
           wget -q -O concrete.zip "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/concrete_floor_02.zip" && unzip -o -j concrete.zip "*.jpg" -d res/assets/textures/concrete/
           wget -q -O wall.zip "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/brick_wall_001.zip" && unzip -o -j wall.zip "*.jpg" -d res/assets/textures/wall/
           wget -q -O sky_download.hdr "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr" && test -s sky_download.hdr && mv sky_download.hdr res/assets/environment/sky.hdr
-          wget -q -O bus_download.glb "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb" && test -s bus_download.glb && mv bus_download.glb res/assets/models/bus.glb || echo "bus fallback CSG"
+          # NOTE: no bus.glb is downloaded. The only freely available sample
+          # vehicle (CesiumMilkTruck) is a MILK TRUCK, not a bus, and it looked
+          # nothing like a coach. The game builds a detailed intercity coach out
+          # of meshes instead. Drop a real bus model at res/assets/models/bus.glb
+          # (front facing +Z) and bus_controller.gd will pick it up automatically.
           (cd res/assets/textures/asphalt && for f in *Color*; do mv "$f" albedo.jpg; done; for f in *Normal*; do mv "$f" normal.jpg; done; for f in *Roughness*; do mv "$f" roughness.jpg; done) || true
           (cd res/assets/textures/concrete && for f in *.jpg; do case "$f" in *[Cc]olor*|*albedo*) mv "$f" albedo.jpg ;; *[Nn]ormal*|*normal*) mv "$f" normal.jpg ;; esac; done) || true
           (cd res/assets/textures/wall && for f in *.jpg; do case "$f" in *[Cc]olor*|*albedo*) mv "$f" albedo.jpg ;; *[Nn]ormal*|*normal*) mv "$f" normal.jpg ;; esac; done) || true
