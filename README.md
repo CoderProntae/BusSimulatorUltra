@@ -116,6 +116,41 @@ authority with speed, 80 km/h cap, low centre of mass for heavy body roll.
 
 ---
 
+## CI gotcha: do not use `--check-only --script`
+
+Validating scripts one-by-one with:
+
+```bash
+./godot --headless --path res --check-only --script scripts/bus_controller.gd
+```
+
+produces a **false failure**:
+
+```
+SCRIPT ERROR: Compile Error: Identifier not found: GameState
+```
+
+`GameState` is an autoload declared in `project.godot`. Loading a single
+script in isolation does not register autoloads, so the identifier cannot
+resolve even though the file is perfectly valid. Note it reports a *Compile*
+Error, not a Parse Error - the syntax was never the problem.
+
+The workflow instead:
+
+1. runs `gdparse res/scripts/*.gd` (gdtoolkit) for pure syntax,
+2. greps for inline-if inside `%` format tuples, and
+3. boots the real project headlessly (`--quit-after 180`) so autoloads exist,
+   scanning the log for `SCRIPT ERROR` / `Parse Error` / `Compile Error`.
+
+### Harmless headless warnings (ignore these)
+
+```
+Do not use progress dialog (task) while flushing the message queue...
+Condition "!tasks.has(p_task)" is true. Returning: canceled
+Parameter "t" is null.   (dummy texture storage, no GPU in CI)
+cannot connect to daemon at tcp:5037   (ADB, no device attached)
+```
+
 ## Asset strategy
 
 Real 1K PBR maps are downloaded **in CI** (ambientCG + PolyHaven) into the
