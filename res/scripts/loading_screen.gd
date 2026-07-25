@@ -55,7 +55,11 @@ const TIPS: Array[String] = [
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# set_anchors_and_offsets_preset, NOT set_anchors_preset: this node is a
+	# bare Control.new() (0x0) and _ready() runs inside the tree, where
+	# set_anchors_preset(keep_offsets=false) preserves the current rect and
+	# would leave the loading screen collapsed in the top-left corner.
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build_ui()
 	_start_loading()
 

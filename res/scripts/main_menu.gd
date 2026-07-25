@@ -5,12 +5,26 @@ extends Control
 
 signal play_pressed()
 
+## Buttons must be TouchButton, not plain Button: with
+## emulate_mouse_from_touch = false (needed to keep the steering wheel stable,
+## HANDOVER.md 3.6) a stock Button never sees a finger tap on Android.
+const TOUCH_BUTTON_SCRIPT: String = "res://scripts/touch_button.gd"
+
 var _panel: Panel = null
 var _settings_root: Control = null
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# MUST be set_anchors_AND_OFFSETS_preset here.
+	#
+	# set_anchors_preset() defaults to keep_offsets=false, which in Godot means
+	# "recompute the offsets so the control keeps the rect it has right now".
+	# This node is created with Control.new() (size 0x0) and the call happens
+	# from _ready(), i.e. already inside the tree, so the engine dutifully
+	# preserved 0x0: the whole menu collapsed into the top-left corner and the
+	# backdrop was never visible. Setting the offsets too gives a real
+	# full-screen rect.
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build()
 
 
@@ -143,6 +157,10 @@ func _on_quality() -> void:
 
 func _make_button(text: String, color: Color, font_size: int) -> Button:
 	var button: Button = Button.new()
+	if ResourceLoader.exists(TOUCH_BUTTON_SCRIPT):
+		var script: Resource = load(TOUCH_BUTTON_SCRIPT)
+		if script is Script:
+			button.set_script(script)
 	button.text = text
 	button.custom_minimum_size = Vector2(0.0, 58.0)
 

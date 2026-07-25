@@ -142,6 +142,92 @@ def check_format_rule():
                 warn(rel + ":" + str(i) + " inline-if expression present")
 
 
+# --- 3b. UI regressions that shipped a broken menu once already -------------
+def check_ui_contract():
+    """Two bugs made the whole main menu unusable on the phone. Both are easy
+    to reintroduce by accident, so they are pinned down here.
+
+    1) A root Control created with Control.new() is 0x0. Calling
+       set_anchors_preset() from _ready() defaults to keep_offsets=false,
+       which Godot reads as "keep the rect you have now" -- so it kept 0x0
+       and the entire menu collapsed into the top-left corner.
+       The fix is set_anchors_and_offsets_preset().
+
+    2) BaseButton::gui_input() only handles InputEventMouseButton. The project
+       must keep emulate_mouse_from_touch=false (otherwise the synthetic mouse
+       pointer fights the real one for the steering wheel), so a plain Button
+       never receives a finger tap on Android. Buttons the player has to press
+       must therefore use scripts/touch_button.gd.
+    """
+    roots = {
+        "res/scripts/main_menu.gd": "main menu",
+        "res/scripts/loading_screen.gd": "loading screen",
+        "res/scripts/ui_manager.gd": "HUD",
+    }
+    for rel, label in roots.items():
+        path = os.path.join(ROOT, rel)
+        if not os.path.isfile(path):
+            err("missing " + rel)
+            continue
+        text = open(path, encoding="utf-8").read()
+        body = text.split("func _ready()", 1)
+        if len(body) < 2:
+            err(rel + " has no _ready()")
+            continue
+        head = body[1].split("func ", 1)[0]
+        if "set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)" in head:
+            ok(label + " root uses set_anchors_AND_OFFSETS_preset")
+        elif "set_anchors_preset(Control.PRESET_FULL_RECT)" in head:
+            err(
+                rel
+                + ": _ready() uses set_anchors_preset on a 0x0 root; it keeps"
+                + " the empty rect and collapses the UI into the corner."
+                + " Use set_anchors_and_offsets_preset."
+            )
+        else:
+            warn(rel + ": _ready() sets no full-rect preset")
+
+    touch_script = os.path.join(RES, "scripts", "touch_button.gd")
+    if os.path.isfile(touch_script):
+        ok("touch_button.gd present (touch-capable Button)")
+    else:
+        err("res/scripts/touch_button.gd missing: every Button is dead on touch")
+
+    # Buttons the player must be able to press may not be raw Buttons.
+    for rel in ("res/scripts/main_menu.gd", "res/scripts/ui_manager.gd"):
+        path = os.path.join(ROOT, rel)
+        if not os.path.isfile(path):
+            continue
+        text = open(path, encoding="utf-8").read()
+        if "TOUCH_BUTTON_SCRIPT" not in text:
+            err(rel + " does not reference touch_button.gd")
+            continue
+        raw = 0
+        for i, line in enumerate(text.splitlines(), 1):
+            code = line.split("#")[0]
+            if re.search(r"=\s*Button\.new\(\)", code):
+                raw += 1
+        # main_menu builds its buttons through _make_button, ui_manager
+        # through _make_touch_button; each owns exactly one Button.new().
+        if raw <= 1:
+            ok(rel + " routes Buttons through the touch-capable factory")
+        else:
+            err(
+                rel
+                + ": "
+                + str(raw)
+                + " raw Button.new() calls; with emulate_mouse_from_touch="
+                + "false these cannot be tapped on Android"
+            )
+
+    # The setting the whole touch design depends on.
+    cfg = open(os.path.join(RES, "project.godot"), encoding="utf-8").read()
+    if "pointing/emulate_mouse_from_touch=false" in cfg:
+        ok("emulate_mouse_from_touch=false (steering stays stable)")
+    else:
+        err("emulate_mouse_from_touch must stay false, see HANDOVER.md 3.6")
+
+
 # --- 4. resource paths ------------------------------------------------------
 def check_resources():
     referenced = set()
@@ -306,6 +392,7 @@ def main():
     check_parse()
     check_style()
     check_format_rule()
+    check_ui_contract()
     check_resources()
     check_asset_contract()
     check_workflow()

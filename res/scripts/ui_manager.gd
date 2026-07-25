@@ -20,6 +20,10 @@ const WHEEL_SIZE: float = 260.0
 const WHEEL_FOLLOW_SPEED: float = 7.5
 ## Self-centring speed when the wheel is released.
 const WHEEL_RETURN_SPEED: float = 4.2
+## Action buttons must be TouchButton: emulate_mouse_from_touch is false (see
+## HANDOVER.md 3.6), so a stock Button gets no InputEventMouseButton from a
+## finger and would be completely dead on a phone.
+const TOUCH_BUTTON_SCRIPT: String = "res://scripts/touch_button.gd"
 
 @export var bus_path: NodePath
 @export var camera_path: NodePath
@@ -61,7 +65,11 @@ var _settings_rows: Dictionary = {}
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# HUD.tscn already ships a full-rect anchor, but main.gd falls back to a
+	# bare Control.new() (0x0) if the scene ever fails to load. Setting the
+	# offsets too means that fallback still fills the screen instead of
+	# collapsing into the top-left corner.
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	_resolve_refs()
@@ -724,8 +732,17 @@ func _build_action_buttons() -> void:
 	column.add_child(_light_button)
 
 
-func _make_action_button(text: String, color: Color) -> Button:
+func _make_touch_button() -> Button:
 	var button: Button = Button.new()
+	if ResourceLoader.exists(TOUCH_BUTTON_SCRIPT):
+		var script: Resource = load(TOUCH_BUTTON_SCRIPT)
+		if script is Script:
+			button.set_script(script)
+	return button
+
+
+func _make_action_button(text: String, color: Color) -> Button:
+	var button: Button = _make_touch_button()
 	button.text = text
 	button.custom_minimum_size = Vector2(BUTTON_SIZE + 24.0, BUTTON_SIZE * 0.62)
 	_style_button(button, color)
@@ -786,7 +803,7 @@ func _update_fps() -> void:
 
 func _build_settings_menu() -> void:
 	# Gear button, top-right corner.
-	var gear: Button = Button.new()
+	var gear: Button = _make_touch_button()
 	gear.name = "SettingsButton"
 	gear.text = "SETTINGS"
 	gear.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -809,6 +826,9 @@ func _build_settings_menu() -> void:
 	panel.add_theme_stylebox_override("panel",
 		_make_panel_style(Color(0.05, 0.06, 0.09, 0.96), 18))
 	panel.visible = false
+	# TouchButton hit-tests by hand, so it cannot know something is covering
+	# it. This group tells it to ignore taps while the panel is open.
+	panel.add_to_group("touch_modal")
 	add_child(panel)
 	_settings_panel = panel
 
@@ -836,7 +856,7 @@ func _build_settings_menu() -> void:
 	_add_setting_row(box, "fps_cap", "FPS Limit", _on_fps_cap_pressed)
 	_add_setting_row(box, "fps_show", "Show FPS", _on_fps_show_pressed)
 
-	var close: Button = Button.new()
+	var close: Button = _make_touch_button()
 	close.text = "CLOSE"
 	close.custom_minimum_size = Vector2(0.0, 46.0)
 	_style_button(close, Color(0.35, 0.16, 0.18, 0.85))
@@ -859,7 +879,7 @@ func _add_setting_row(parent: Node, key: String, label_text: String,
 	name_label.add_theme_font_size_override("font_size", 18)
 	row.add_child(name_label)
 
-	var value_button: Button = Button.new()
+	var value_button: Button = _make_touch_button()
 	value_button.text = "-"
 	value_button.custom_minimum_size = Vector2(230.0, 40.0)
 	value_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
