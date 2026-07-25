@@ -1,0 +1,109 @@
+[gd_scene load_steps=3 format=3 uid="uid://ui_main_001"]
+
+[ext_resource type="Script" path="res://scripts/ui_controller.gd" id="1_ui"]
+[ext_resource type="Texture2D" uid="uid://tx_minimap" path="res://assets/textures/minimap_bg.jpg" id="2_map"]
+
+[node name="UIOverlay" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_ui")
+
+[node name="HUD" type="VBoxContainer" parent="."]
+layout_mode = 0
+anchor_left = 0.02
+anchor_top = 0.01
+anchor_right = 0.4
+anchor_bottom = 0.3
+
+[node name="Speedometer" type="Label" parent="HUD"]
+layout_mode = 2
+text = "0 km/h"
+
+[node name="FuelGauge" type="ProgressBar" parent="HUD"]
+layout_mode = 2
+value = 80.0
+min_value = 0.0
+max_value = 100.0
+
+[node name="MoneyLabel" type="Label" parent="HUD"]
+layout_mode = 2
+text = "Money: $500"
+
+[node name="PassengerLabel" type="Label" parent="HUD"]
+layout_mode = 2
+text = "Passengers: 0"
+
+[node name="RouteName" type="Label" parent="HUD"]
+layout_mode = 2
+text = "Next Stop: Central Station"
+
+[node name="GameClock" type="Label" parent="HUD"]
+layout_mode = 2
+text = "08:00"
+
+[node name="GearIndicator" type="Label" parent="HUD"]
+layout_mode = 2
+text = "D"
+
+[node name="Minimap" type="TextureRect" parent="HUD"]
+layout_mode = 2
+texture = ExtResource("2_map")
+expand_mode = 1
+stretch_mode = 4
+
+[node name="Controls" type="HBoxContainer" parent="."]
+layout_mode = 1
+anchor_left = 0.0
+anchor_top = 0.85
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Steering" type="HBoxContainer" parent="Controls"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 150)
+
+[node name="SteerLeft" type="Button" parent="Controls/Steering"]
+layout_mode = 2
+text = "◀"
+button_down = false
+
+[node name="SteerRight" type="Button" parent="Controls/Steering"]
+layout_mode = 2
+text = "▶"
+button_down = false
+
+[node name="Pedals" type="HBoxContainer" parent="Controls"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 150)
+
+[node name="Brake" type="Button" parent="Controls/Pedals"]
+layout_mode = 2
+text = "BRAKE"
+button_down = false
+
+[node name="Throttle" type="Button" parent="Controls/Pedals"]
+layout_mode = 2
+text = "GAS"
+button_down = false
+
+[node name="HornButton" type="Button" parent="Controls"]
+layout_mode = 2
+text = "HORN"
+
+[node name="DoorButton" type="Button" parent="Controls"]
+layout_mode = 2
+text = "DOORS"
+
+[node name="CameraButton" type="Button" parent="Controls"]
+layout_mode = 2
+text = "CAM"
+
+[node name="HeadlightButton" type="Button" parent="Controls"]
+layout_mode = 2
+text = "LIGHTS"

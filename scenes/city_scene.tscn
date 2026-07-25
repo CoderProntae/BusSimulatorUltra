@@ -1,0 +1,27 @@
+[gd_scene load_steps=3 format=3 uid="uid://city_main_001"]
+
+[ext_resource type="Script" path="res://scripts/city_environment.gd" id="1_city"]
+[ext_resource type="Script" path="res://scripts/traffic_system.gd" id="2_traffic"]
+
+[node name="CityScene" type="Node3D"]
+script = ExtResource("1_city")
+
+[node name="Buildings" type="Node3D" parent="."]
+
+[node name="Roads" type="Node3D" parent="."]
+
+[node name="TrafficLights" type="Node3D" parent="."]
+
+[node name="BusStops" type="Node3D" parent="."]
+
+[node name="Trees" type="Node3D" parent="."]
+
+[node name="TrafficVehicles" type="Node3D" parent="."]
+script = ExtResource("2_traffic")
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("ground_mesh")
+
+[sub_resource type="PlaneMesh" id="ground_mesh"]
+resource_name = "CityGround"
+size = Vector2(400, 400)

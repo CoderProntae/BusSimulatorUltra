@@ -1,0 +1,43 @@
+; Godot Project File
+; Godot v4.4 - Bus Simulator Ultra
+
+config_version=5
+
+[application]
+config/name="Bus Simulator Ultra"
+config/features=PackedStringArray("4.4", "Mobile", "Forward Plus", "GLES3", "Vulkan Clustered")
+config/icon="res://icon.png"
+run/main_scene="res://scenes/main_scene.tscn"
+
+[rendering]
+environment/default_environment="res://default_env.tres"
+renderer/rendering_method="forward_plus"
+
+[display]
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[physics]
+3d/default_gravity=9.8
+3d/default_gravity_vector=(0, -1, 0)
+
+[android]
+package/unique_name="org.bussimulator.ultra"
+package/name="Bus Simulator Ultra"
+package/version_code=1
+package/version="1.0.0"
+package/sign_name=""
+package/sign_release=""
+package/sign_debug=""
+package/sign_debug_keystore="user://debug.keystore"
+package/sign_release_keystore="user://release.keystore"
+package/sign_release_user=""
+package/sign_release_password=""
+package/permissions="INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE"
+
+[editor_plugins]
+enabled=PackedStringArray()
+
+[dotnet_project]

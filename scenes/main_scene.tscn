@@ -1,0 +1,52 @@
+[gd_scene load_steps=6 format=3 uid="uid://main_001"]
+
+[ext_resource type="Script" path="res://scripts/game_manager.gd" id="1_gm"]
+[ext_resource type="Script" path="res://scripts/camera_controller.gd" id="2_cam"]
+[ext_resource type="PackedScene" uid="uid://city_main_001" path="res://scenes/city_scene.tscn" id="3_city"]
+[ext_resource type="PackedScene" uid="uid://c1d2e3f4a5b6c" path="res://scenes/bus_scene.tscn" id="4_bus"]
+[ext_resource type="Script" path="res://scripts/traffic_system.gd" id="5_traffic"]
+[ext_resource type="PackedScene" uid="uid://ui_main_001" path="res://scenes/ui_scene.tscn" id="6_ui"]
+
+[node name="MainScene" type="Node3D"]
+script = ExtResource("1_gm")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env_default")
+
+[sub_resource type="Environment" id="env_default"]
+background_mode = 1
+ss_reflections_enabled = true
+ss_reflections_depth = 1
+glow_enabled = true
+glow_intensity = 1.2
+fog_enabled = true
+fog_density = 0.015
+fog_height_falloff = 0.05
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.408248, 0.57735, 0, 0.816497, 0.57735, -0.707107, -0.408248, 0.57735, 0, 20, 0)
+shadow_enabled = 3
+shadow_bias = 0.05
+shadow_normal_bias = 0.1
+shadow_blur = 1.5
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 15, 20)
+projection = 0
+fov = 70.0
+near = 0.1
+far = 500.0
+script = ExtResource("2_cam")
+
+[node name="CityScene" parent="." instance=ExtResource("3_city")]
+
+[node name="BusScene" parent="." instance=ExtResource("4_bus")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+
+
+[node name="UI" type="CanvasLayer" parent="."]
+layer = 10
+process_mode = 1
+node = true
+
+[node name="UIOverlay" parent="UI" instance=ExtResource("6_ui")]

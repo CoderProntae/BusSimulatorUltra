@@ -1,0 +1,183 @@
+[gd_scene load_steps=3 format=3 uid="uid://c1d2e3f4a5b6c"]
+
+[ext_resource type="Script" path="res://scripts/bus_controller.gd" id="1_bus"]
+[ext_resource type="Texture2D" uid="uid://tx_bus_paint" path="res://assets/textures/bus_body_paint.jpg" id="2_paint"]
+
+[node name="BusScene" type="Node3D"]
+script = ExtResource("1_bus")
+
+[node name="BodyMesh" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+mesh = SubResource("bus_mesh_1")
+
+[sub_resource type="BoxMesh" id="bus_mesh_1"]
+resource_name = "BusBody"
+size = Vector3(2.5, 2.2, 10.0)
+
+[node name="Components" type="Node3D" parent="BodyMesh"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="Windshield" type="MeshInstance3D" parent="BodyMesh/Components"]
+transform = Transform3D(0.707107, 0, 0.707107, 0, 1, 0, -0.707107, 0, 0.707107, 0, 0.5, 5.0)
+mesh = SubResource("windshield_mesh")
+
+[sub_resource type="BoxMesh" id="windshield_mesh"]
+resource_name = "Windshield"
+size = Vector3(2.2, 1.5, 0.05)
+
+[node name="FrontBumper" type="MeshInstance3D" parent="BodyMesh/Components"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.1, -5.0)
+mesh = SubResource("bumper_mesh")
+
+[sub_resource type="BoxMesh" id="bumper_mesh"]
+resource_name = "Bumper"
+size = Vector3(2.6, 0.4, 0.3)
+
+[node name="RearBumper" type="MeshInstance3D" parent="BodyMesh/Components"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.1, 5.0)
+mesh = SubResource("bumper_mesh")
+
+[node name="RoofAC" type="MeshInstance3D" parent="BodyMesh/Components"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.8, 0)
+mesh = SubResource("roof_mesh")
+
+[sub_resource type="BoxMesh" id="roof_mesh"]
+resource_name = "RoofAC"
+size = Vector3(1.5, 0.6, 2.5)
+
+[node name="LicensePlate" type="MeshInstance3D" parent="BodyMesh/Components"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 5.2)
+mesh = SubResource("plate_mesh")
+
+[sub_resource type="BoxMesh" id="plate_mesh"]
+resource_name = "LicensePlate"
+size = Vector3(0.6, 0.2, 0.02)
+
+[node name="Wheels" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+
+[node name="FrontLeft" type="MeshInstance3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.1, 0, 3.5)
+mesh = SubResource("wheel_mesh")
+
+[node name="FrontRight" type="MeshInstance3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.1, 0, 3.5)
+mesh = SubResource("wheel_mesh")
+
+[node name="RearLeft" type="MeshInstance3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.1, 0, -3.5)
+mesh = SubResource("wheel_mesh")
+
+[node name="RearRight" type="MeshInstance3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.1, 0, -3.5)
+mesh = SubResource("wheel_mesh")
+
+[sub_resource type="CylinderMesh" id="wheel_mesh"]
+resource_name = "Wheel"
+height = 0.6
+radius = 0.55
+
+[node name="Lights" type="Node3D" parent="."]
+
+[node name="Headlights" type="MeshInstance3D" parent="Lights"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, -4.9)
+mesh = SubResource("light_mesh")
+
+[sub_resource type="CylinderMesh" id="light_mesh"]
+resource_name = "Headlight"
+height = 0.1
+radius = 0.25
+
+[node name="TailLights" type="MeshInstance3D" parent="Lights"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 4.9)
+mesh = SubResource("light_mesh")
+
+[node name="TurnSignals" type="MeshInstance3D" parent="Lights"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, -4.9)
+mesh = SubResource("light_mesh")
+
+[node name="Mirrors" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+
+[node name="LeftMirror" type="MeshInstance3D" parent="Mirrors"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.4, 1.8, 4.5)
+mesh = SubResource("mirror_mesh")
+
+[node name="RightMirror" type="MeshInstance3D" parent="Mirrors"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.4, 1.8, 4.5)
+mesh = SubResource("mirror_mesh")
+
+[sub_resource type="BoxMesh" id="mirror_mesh"]
+resource_name = "Mirror"
+size = Vector3(0.15, 0.25, 0.4)
+
+[node name="Wipers" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 4.9)
+mesh = SubResource("wiper_mesh")
+
+[sub_resource type="BoxMesh" id="wiper_mesh"]
+resource_name = "Wiper"
+size = Vector3(1.8, 0.05, 0.02)
+
+[node name="Doors" type="Node3D" parent="."]
+
+[node name="LeftDoor" type="MeshInstance3D" parent="Doors"]
+transform = Transform3D(0.707107, 0, 0.707107, 0, 1, 0, -0.707107, 0, 0.707107, -1.4, 0.8, 0.5)
+mesh = SubResource("door_mesh")
+
+[node name="RightDoor" type="MeshInstance3D" parent="Doors"]
+transform = Transform3D(0.707107, 0, 0.707107, 0, 1, 0, -0.707107, 0, 0.707107, 1.4, 0.8, 0.5)
+mesh = SubResource("door_mesh")
+
+[sub_resource type="BoxMesh" id="door_mesh"]
+resource_name = "Door"
+size = Vector3(0.15, 1.6, 0.8)
+
+[node name="Interior" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="DriverSeat" type="MeshInstance3D" parent="Interior"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, 3.8)
+mesh = SubResource("seat_mesh")
+
+[node name="Dashboard" type="MeshInstance3D" parent="Interior"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 5.0)
+mesh = SubResource("dash_mesh")
+
+[node name="SteeringWheel" type="MeshInstance3D" parent="Interior/Dashboard"]
+mesh = SubResource("wheel_small_mesh")
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.2)
+
+[node name="RearViewMirror" type="MeshInstance3D" parent="Interior"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.0, 4.9)
+mesh = SubResource("mirror_small_mesh")
+
+[sub_resource type="CylinderMesh" id="seat_mesh"]
+resource_name = "Seat"
+height = 0.9
+radius = 0.35
+
+[sub_resource type="BoxMesh" id="dash_mesh"]
+resource_name = "Dashboard"
+size = Vector3(1.8, 0.6, 0.4)
+
+[sub_resource type="CylinderMesh" id="wheel_small_mesh"]
+resource_name = "SteeringWheel"
+height = 0.05
+radius = 0.35
+
+[sub_resource type="BoxMesh" id="mirror_small_mesh"]
+resource_name = "MirrorSmall"
+size = Vector3(0.4, 0.15, 0.02)
+
+[node name="PassengerSeats" type="Node3D" parent="Interior"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, -0.5)
+
+[node name="Handrails" type="MeshInstance3D" parent="Interior"]
+transform = Transform3D(0.707107, 0, 0.707107, 0, 1, 0, -0.707107, 0, 0.707107, 0, 2.0, 2.0)
+mesh = SubResource("rail_mesh")
+
+[sub_resource type="CylinderMesh" id="rail_mesh"]
+resource_name = "Handrail"
+height = 2.5
+radius = 0.03
