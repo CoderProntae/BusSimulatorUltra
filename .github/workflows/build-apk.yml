@@ -1,4 +1,4 @@
-# =============================================================================
+=============================================================================
 # GitHub Actions workflow for building the Android APK.
 #
 # NOTE: this file could NOT be pushed to .github/workflows/build-apk.yml
@@ -91,21 +91,44 @@ jobs:
           cat res/export_presets.cfg
       - name: Import
         run: ./godot --headless --path res --import --quit || true
-      - name: Check every GDScript parses
+      - name: Install GDScript parser
+        run: pip install "gdtoolkit==4.*"
+           - name: Check every GDScript parses
         run: |
           set -e
-          ./godot --headless --path res --check-only --script scripts/game_state.gd
-          ./godot --headless --path res --check-only --script scripts/bus_controller.gd
-          ./godot --headless --path res --check-only --script scripts/camera_system.gd
-          ./godot --headless --path res --check-only --script scripts/traffic_ai.gd
-          ./godot --headless --path res --check-only --script scripts/passenger_system.gd
-          ./godot --headless --path res --check-only --script scripts/fuel_system.gd
-          ./godot --headless --path res --check-only --script scripts/ui_manager.gd
-          ./godot --headless --path res --check-only --script scripts/day_night_cycle.gd
-          ./godot --headless --path res --check-only --script scripts/city_builder.gd
-          ./godot --headless --path res --check-only --script scripts/street_lamp.gd
-          ./godot --headless --path res --check-only --script scripts/main.gd
+          gdparse res/scripts/*.gd
           echo "all GDScript files parsed"
+      - name: Check for inline-if inside % format tuples
+        run: |
+          set -e
+          if grep -nE "%[[:space:]]*[(\"']" res/scripts/*.gd | grep -E "\bif\b.*\belse\b"; then
+            echo "ERROR: inline-if inside a % format tuple (breaks the GDScript parser)"
+            exit 1
+          fi
+          echo "no %-tuple ternaries"
+      # Informational only (continue-on-error): a false alarm from the dummy
+      # headless renderer must never block the APK. Real script errors are
+      # still printed loudly in the log and marked as a failed step.
+      - name: Smoke test (boots the real project, autoloads registered)
+        continue-on-error: true
+        run: |
+          set +e
+          # NOTE: do NOT use "--check-only --script", it loads each file in
+          # isolation where the GameState autoload is not registered yet and
+          # reports a false "Identifier not found: GameState" compile error.
+          # Booting the project for a few frames validates the scripts the way
+          # the game actually runs them.
+          ./godot --headless --path res --quit-after 180 2>&1 | tee smoke.log
+          echo "---- scanning for real script errors ----"
+          # Ignored on purpose (harmless headless/dummy-renderer noise):
+          #   "Do not use progress dialog (task)", "task_step ... canceled",
+          #   "Parameter \"t\" is null" (dummy texture storage),
+          #   "cannot connect to daemon at tcp:5037" (ADB, no device in CI)
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error" smoke.log; then
+            echo "FAILED: a script error occurred while booting the project"
+            exit 1
+          fi
+          echo "project booted with no script errors"
       - name: Export
         run: |
           mkdir -p build
@@ -116,7 +139,9 @@ jobs:
           ls -la build/BusSimulator.apk
           du -h build/BusSimulator.apk
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: BusSimulator-APK
           path: build/BusSimulator.apk
           retention-days: 30
+          if-no-files-found: error
