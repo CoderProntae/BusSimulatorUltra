@@ -76,7 +76,7 @@ jobs:
           mv templates/* ~/.local/share/godot/export_templates/4.4.stable/
       - name: Keystore
         run: keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug,O=Debug,C=US"
-            - name: Patch export preset
+      - name: Patch export preset
         run: |
           KEYSTORE_PATH=$(pwd)/debug.keystore
           sed -i "s|custom_template/debug=\".*\"|custom_template/debug=\"\"|" res/export_presets.cfg
