@@ -1,8 +1,0 @@
-[gd_scene load_steps=2 format=3]
-
-[ext_resource type="Script" path="res://scripts/traffic_ai.gd" id="1_traffic"]
-
-[node name="TrafficCar" type="CharacterBody3D"]
-script = ExtResource("1_traffic")
-speed = 11.0
-turn_speed = 2.4
