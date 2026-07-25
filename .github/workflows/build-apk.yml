@@ -93,7 +93,7 @@ jobs:
         run: ./godot --headless --path res --import --quit || true
       - name: Install GDScript parser
         run: pip install "gdtoolkit==4.*"
-           - name: Check every GDScript parses
+      - name: Check every GDScript parses
         run: |
           set -e
           gdparse res/scripts/*.gd
