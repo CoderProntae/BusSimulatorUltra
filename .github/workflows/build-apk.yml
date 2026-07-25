@@ -147,6 +147,26 @@ jobs:
 
           grep -E '^(custom_template|keystore)' export_presets.cfg
 
+      - name: Configure Godot Android SDK path
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
+          test -n "$SDK_PATH"
+          test -d "$SDK_PATH"
+
+          echo "Using Android SDK: $SDK_PATH"
+
+          mkdir -p "$HOME/.config/godot"
+
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$SDK_PATH"
+          EOF
+
       - name: Import project resources
         shell: bash
         env:
@@ -156,9 +176,6 @@ jobs:
 
       - name: Export Android APK
         shell: bash
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         run: ./godot --headless --path "$GITHUB_WORKSPACE" --export-debug "Android" "$GITHUB_WORKSPACE/BusSimulator.apk"
 
       - name: Upload APK
