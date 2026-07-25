@@ -1,61 +1,170 @@
-name: Build APK
+name: Build Android APK
+
 on:
   push:
-    branches: [ "**" ]
+    branches: [main, dev, arena/019f99ed-bussimulatorultra]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
-  build:
+  export-apk:
+    name: Export debug APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Download assets (CI has full internet)
-        run: |
-          set +e
-          mkdir -p res/assets/textures/asphalt res/assets/textures/concrete res/assets/textures/wall res/assets/environment res/assets/models
-          wget -L -q -O asphalt.zip "https://ambientcg.com/get?file=Asphalt030_1K-JPG.zip" && unzip -o -j asphalt.zip "*Color*.jpg" -d res/assets/textures/asphalt/ && unzip -o -j asphalt.zip "*Normal*.jpg" -d res/assets/textures/asphalt/ && unzip -o -j asphalt.zip "*Roughness*.jpg" -d res/assets/textures/asphalt/
-          wget -q -O concrete.zip "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/concrete_floor_02.zip" && unzip -o -j concrete.zip "*.jpg" -d res/assets/textures/concrete/
-          wget -q -O wall.zip "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/brick_wall_001.zip" && unzip -o -j wall.zip "*.jpg" -d res/assets/textures/wall/
-          wget -q -O res/assets/environment/sky.hdr "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr"
-          wget -q -O res/assets/models/bus.glb "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb" || echo "bus fallback CSG"
-          (cd res/assets/textures/asphalt && for f in *Color*; do mv "$f" albedo.jpg; done; for f in *Normal*; do mv "$f" normal.jpg; done; for f in *Roughness*; do mv "$f" roughness.jpg; done) || true
-          (cd res/assets/textures/concrete && for f in *.jpg; do case "$f" in *[Cc]olor*|*albedo*) mv "$f" albedo.jpg ;; *[Nn]ormal*|*normal*) mv "$f" normal.jpg ;; esac; done) || true
-          (cd res/assets/textures/wall && for f in *.jpg; do case "$f" in *[Cc]olor*|*albedo*) mv "$f" albedo.jpg ;; *[Nn]ormal*|*normal*) mv "$f" normal.jpg ;; esac; done) || true
-          echo "---- downloaded assets ----"; find res/assets -type f -exec ls -la {} \;
-      - uses: actions/setup-java@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-      - uses: android-actions/setup-android@v3
-      - name: Download Godot
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
         run: |
-          wget -q https://github.com/godotengine/godot/releases/download/4.4-stable/Godot_v4.4-stable_linux.x86_64.zip
-          unzip -o Godot_v4.4-stable_linux.x86_64.zip
-          mv Godot_v4.4-stable_linux.x86_64 godot && chmod +x godot
-      - name: Templates
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Download game assets
+        shell: bash
         run: |
-          wget -q https://github.com/godotengine/godot/releases/download/4.4-stable/Godot_v4.4-stable_export_templates.tpz
-          mkdir -p ~/.local/share/godot/export_templates/4.4.stable
-          unzip -o Godot_v4.4-stable_export_templates.tpz
-          mv templates/* ~/.local/share/godot/export_templates/4.4.stable/
-      - name: Keystore
-        run: keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug,O=Debug,C=US"
-      - name: Patch export preset
+          set -u
+          mkdir -p res/assets/textures/asphalt
+          mkdir -p res/assets/textures/concrete
+          mkdir -p res/assets/textures/wall
+          mkdir -p res/assets/environment
+          mkdir -p res/assets/models
+
+          download() {
+            local url="$1"
+            local output="$2"
+            curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 20 "$url" --output "$output"
+          }
+
+          echo "Downloading optional PBR asset archives..."
+          download "https://ambientcg.com/get?file=Asphalt030_1K-JPG.zip" asphalt.zip || true
+          download "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/concrete_floor_02.zip" concrete.zip || true
+          download "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/brick_wall_001.zip" wall.zip || true
+          download "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr" res/assets/environment/sky.hdr || true
+          download "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb" res/assets/models/bus.glb || true
+
+          unzip -oq asphalt.zip -d /tmp/asphalt 2>/dev/null || true
+          unzip -oq concrete.zip -d /tmp/concrete 2>/dev/null || true
+          unzip -oq wall.zip -d /tmp/wall 2>/dev/null || true
+
+          copy_first() {
+            local source_dir="$1"
+            local pattern="$2"
+            local destination="$3"
+            local found
+            found=$(find "$source_dir" -type f -iname "$pattern" | head -n 1 || true)
+
+            if [ -n "$found" ]; then
+              cp "$found" "$destination"
+              echo "Installed $destination"
+            else
+              echo "Asset not found for $destination; procedural fallback remains available"
+            fi
+          }
+
+          copy_first /tmp/asphalt "*color*.jpg" res/assets/textures/asphalt/albedo.jpg
+          copy_first /tmp/asphalt "*normal*.jpg" res/assets/textures/asphalt/normal.jpg
+          copy_first /tmp/asphalt "*roughness*.jpg" res/assets/textures/asphalt/roughness.jpg
+
+          copy_first /tmp/concrete "*color*.jpg" res/assets/textures/concrete/albedo.jpg
+          copy_first /tmp/concrete "*normal*.jpg" res/assets/textures/concrete/normal.jpg
+
+          copy_first /tmp/wall "*color*.jpg" res/assets/textures/wall/albedo.jpg
+          copy_first /tmp/wall "*normal*.jpg" res/assets/textures/wall/normal.jpg
+
+          echo "Downloaded asset inventory:"
+          find res/assets -type f ! -name .gitkeep -printf '%p (%k KB)\n' || true
+
+      - name: Download Godot 4.4 and export templates
+        shell: bash
         run: |
-          KEYSTORE_PATH=$(pwd)/debug.keystore
-          sed -i "s|custom_template/debug=\".*\"|custom_template/debug=\"\"|" export_presets.cfg
-          sed -i "s|custom_template/release=\".*\"|custom_template/release=\"\"|" export_presets.cfg
-          sed -i "s|keystore/debug=\".*\"|keystore/debug=\"$KEYSTORE_PATH\"|" export_presets.cfg
-          sed -i "s|keystore/debug_user=\".*\"|keystore/debug_user=\"androiddebugkey\"|" export_presets.cfg
-          sed -i "s|keystore/debug_password=\".*\"|keystore/debug_password=\"android\"|" export_presets.cfg
-          sed -i "s|keystore/release=\".*\"|keystore/release=\"\"|" export_presets.cfg
-          sed -i "s|keystore/release_user=\".*\"|keystore/release_user=\"\"|" export_presets.cfg
-          sed -i "s|keystore/release_password=\".*\"|keystore/release_password=\"\"|" export_presets.cfg
-      - name: Import
-        run: ./godot --headless --import --quit || true
-      - name: Export
-        run: ./godot --headless --export-debug "Android" BusSimulator.apk
-      - uses: actions/upload-artifact@v4
+          set -euo pipefail
+          GODOT_VERSION=4.4-stable
+
+          curl --fail --location --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" \
+            --output godot.zip
+
+          unzip -oq godot.zip
+          mv "Godot_v${GODOT_VERSION}_linux.x86_64" godot
+          chmod +x godot
+
+          curl --fail --location --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz" \
+            --output templates.tpz
+
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.4.stable"
+          unzip -oq templates.tpz -d /tmp/godot-templates
+          cp -R /tmp/godot-templates/templates/. "$HOME/.local/share/godot/export_templates/4.4.stable/"
+
+          ./godot --version
+
+      - name: Create debug signing keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          keytool -genkeypair -noprompt -v \
+            -keystore "$GITHUB_WORKSPACE/debug.keystore" \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass android \
+            -keypass android \
+            -dname "CN=Android Debug,O=BusSimulator,C=TR"
+
+      - name: Configure Android export preset
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYSTORE_PATH="$GITHUB_WORKSPACE/debug.keystore"
+
+          sed -i "s|^custom_template/debug=.*|custom_template/debug=\"\"|" export_presets.cfg
+          sed -i "s|^custom_template/release=.*|custom_template/release=\"\"|" export_presets.cfg
+
+          sed -i "s|^keystore/debug=.*|keystore/debug=\"$KEYSTORE_PATH\"|" export_presets.cfg
+          sed -i "s|^keystore/debug_user=.*|keystore/debug_user=\"androiddebugkey\"|" export_presets.cfg
+          sed -i "s|^keystore/debug_password=.*|keystore/debug_password=\"android\"|" export_presets.cfg
+
+          sed -i "s|^keystore/release=.*|keystore/release=\"\"|" export_presets.cfg
+          sed -i "s|^keystore/release_user=.*|keystore/release_user=\"\"|" export_presets.cfg
+          sed -i "s|^keystore/release_password=.*|keystore/release_password=\"\"|" export_presets.cfg
+
+          grep -E '^(custom_template|keystore)' export_presets.cfg
+
+      - name: Import project resources
+        shell: bash
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: ./godot --headless --path "$GITHUB_WORKSPACE" --import --quit
+
+      - name: Export Android APK
+        shell: bash
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: ./godot --headless --path "$GITHUB_WORKSPACE" --export-debug "Android" "$GITHUB_WORKSPACE/BusSimulator.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: BusSimulator-APK
+          name: BusSimulator-debug-APK
           path: BusSimulator.apk
+          if-no-files-found: error
           retention-days: 30
