@@ -72,7 +72,9 @@ func _update_chase(delta: float) -> void:
 	var basis: Basis = target.global_transform.basis
 	var origin: Vector3 = target.global_transform.origin
 
-	var back: Vector3 = basis.z.normalized()
+	# The bus is a VehicleBody3D: its forward is +Z (Vector3.MODEL_FRONT),
+	# so "back" (where the chase camera sits) is -Z.
+	var back: Vector3 = -basis.z.normalized()
 	var up: Vector3 = Vector3.UP
 
 	var desired: Vector3 = origin + back * chase_distance + up * chase_height
@@ -123,7 +125,8 @@ func _update_interior(delta: float) -> void:
 		pos = target.to_global(Vector3(-0.62, 0.62, -4.05))
 
 	var basis: Basis = target.global_transform.basis
-	var look_point: Vector3 = pos - basis.z * 12.0 + Vector3.UP * 0.2
+	# Look out through the windshield, i.e. along the bus forward (+Z).
+	var look_point: Vector3 = pos + basis.z * 12.0 + Vector3.UP * 0.2
 
 	var t: float = clampf(18.0 * delta, 0.0, 1.0)
 	_current_pos = _current_pos.lerp(pos, t)

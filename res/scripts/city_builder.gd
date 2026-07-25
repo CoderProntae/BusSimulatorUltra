@@ -900,4 +900,6 @@ func get_spawn_transform() -> Transform3D:
 		x = _road_positions_x[0] + ROAD_WIDTH * 0.25
 	var t: Transform3D = Transform3D.IDENTITY
 	t.origin = Vector3(x, 1.6, -BLOCK_SIZE * 0.8)
+	# Identity basis already points the bus along +Z, which is the
+	# VehicleBody3D forward direction, so it drives up the road on spawn.
 	return t
