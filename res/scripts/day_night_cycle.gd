@@ -141,7 +141,10 @@ func _apply_environment(night: float, day_amount: float) -> void:
 			pano.energy_multiplier = lerpf(0.06, 1.0, day_amount)
 
 	env.fog_light_color = Color(0.10, 0.14, 0.24).lerp(Color(0.72, 0.80, 0.92), day_amount)
-	env.volumetric_fog_density = lerpf(0.028, 0.018, day_amount)
+	# Depth fog only: volumetric fog is unsupported on the Mobile renderer.
+	env.fog_density = lerpf(0.006, 0.004, day_amount)
+	if env.volumetric_fog_enabled:
+		env.volumetric_fog_density = lerpf(0.028, 0.018, day_amount)
 	env.glow_intensity = lerpf(1.1, 0.55, day_amount)
 
 

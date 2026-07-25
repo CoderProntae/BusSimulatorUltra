@@ -22,10 +22,12 @@ uniform sampler2D wall_texture : source_color, hint_default_white, filter_linear
 uniform float wall_texture_mix : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 wall_uv_scale = vec3(2.0, 2.0, 1.0);
 
+// "highp" per-variable modifiers (documented GDShader syntax): mobile GPUs may
+// otherwise run this hash at mediump, which speckles large facades.
 float hash21(vec2 p) {
-	p = fract(p * vec2(233.34, 851.73));
-	p += dot(p, p + 23.45);
-	return fract(p.x * p.y);
+	highp vec2 q = fract(p * vec2(233.34, 851.73));
+	q += dot(q, q + 23.45);
+	return fract(q.x * q.y);
 }
 
 float noise21(vec2 p) {

@@ -24,6 +24,7 @@ func _ready() -> void:
 	_spawn_camera()
 	_spawn_hud()
 	_spawn_reflection_probe()
+	_apply_renderer_safe_graphics()
 
 	if GameState != null:
 		GameState.reset()
@@ -123,7 +124,9 @@ func _spawn_reflection_probe() -> void:
 	probe.origin_offset = Vector3(0.0, 0.0, 0.0)
 	probe.intensity = 1.0
 	probe.max_distance = 160.0
-	probe.update_mode = ReflectionProbe.UPDATE_ALWAYS
+	# UPDATE_ALWAYS re-renders the probe every frame, which is far too costly
+	# on mobile GPUs (a common source of tiling/corruption artifacts).
+	probe.update_mode = ReflectionProbe.UPDATE_ONCE
 	probe.interior = false
 	probe.enable_shadows = false
 	probe.ambient_mode = ReflectionProbe.AMBIENT_ENVIRONMENT
@@ -132,9 +135,79 @@ func _spawn_reflection_probe() -> void:
 	probe.global_position = bus.global_position + Vector3(0.0, 6.0, 0.0)
 
 
-func _physics_process(_delta: float) -> void:
-	if _probe != null and is_instance_valid(_probe) and bus != null and is_instance_valid(bus):
-		_probe.global_position = bus.global_position + Vector3(0.0, 6.0, 0.0)
+var _probe_accum: float = 0.0
+
+
+func _physics_process(delta: float) -> void:
+	# Move the probe with the bus, but only every ~1.5 s and only after a real
+	# displacement, so the (expensive) re-bake does not run every frame.
+	if _probe == null or not is_instance_valid(_probe):
+		return
+	if bus == null or not is_instance_valid(bus):
+		return
+	_probe_accum += delta
+	if _probe_accum < 1.5:
+		return
+	_probe_accum = 0.0
+	var target: Vector3 = bus.global_position + Vector3(0.0, 6.0, 0.0)
+	if _probe.global_position.distance_to(target) < 12.0:
+		return
+	_probe.global_position = target
+
+
+func _apply_renderer_safe_graphics() -> void:
+	## Some post-processing effects are NOT supported outside the Forward+
+	## renderer. Leaving them on for the Mobile / Compatibility renderers makes
+	## phone GPUs sample undefined buffers, which shows up as heavy static /
+	## "ants" crawling over every 3D surface (the sky stays clean because it
+	## has no depth). Godot docs, renderer feature comparison:
+	##   Volumetric Fog  - Mobile: NO,  Compatibility: NO
+	##   SSR             - Mobile: NO,  Compatibility: NO
+	##   SSIL            - Mobile: NO,  Compatibility: NO
+	##   SSAO            - Mobile: NO,  Compatibility: yes
+	if world == null or not is_instance_valid(world):
+		return
+
+	var method: String = str(
+		ProjectSettings.get_setting("rendering/renderer/rendering_method", "forward_plus")
+	)
+	if OS.has_feature("mobile") or OS.has_feature("web"):
+		method = str(
+			ProjectSettings.get_setting("rendering/renderer/rendering_method.mobile", method)
+		)
+	var is_forward_plus: bool = method == "forward_plus"
+	if is_forward_plus:
+		return
+
+	var env_node: Node = world.find_child("WorldEnvironment", true, false)
+	if env_node == null or not (env_node is WorldEnvironment):
+		return
+	var env: Environment = (env_node as WorldEnvironment).environment
+	if env == null:
+		return
+
+	env.ssr_enabled = false
+	env.ssil_enabled = false
+	env.volumetric_fog_enabled = false
+	if method != "gl_compatibility":
+		env.ssao_enabled = false
+
+	# Depth fog works on every renderer: use it to keep the sense of distance.
+	env.fog_enabled = true
+
+	# Tighter shadow range = better depth precision = no shadow acne shimmer.
+	var sun: Node = world.find_child("Sun", true, false)
+	if sun != null and sun is DirectionalLight3D:
+		var light: DirectionalLight3D = sun as DirectionalLight3D
+		light.directional_shadow_max_distance = 120.0
+		light.shadow_bias = 0.06
+		light.shadow_normal_bias = 2.0
+		light.light_angular_distance = 0.0
+
+	if _probe != null and is_instance_valid(_probe):
+		_probe.intensity = 0.7
+
+	print("Graphics: renderer=" + method + " -> disabled Forward+ only effects")
 
 
 func _safe_scene(path: String) -> PackedScene:
