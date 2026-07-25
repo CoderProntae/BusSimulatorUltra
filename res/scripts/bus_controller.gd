@@ -23,9 +23,9 @@ signal horn_pressed()
 const BUS_MODEL_PATH: String = "res://assets/models/bus.glb"
 
 const MAX_SPEED_KMH: float = 80.0
-const MAX_STEER_ANGLE: float = 0.42
-const STEER_SPEED: float = 2.6
-const STEER_RETURN_SPEED: float = 3.4
+const MAX_STEER_ANGLE: float = 0.55
+const STEER_SPEED: float = 3.4
+const STEER_RETURN_SPEED: float = 4.2
 const ENGINE_POWER: float = 3400.0
 const BRAKE_POWER: float = 90.0
 const HANDBRAKE_POWER: float = 220.0
@@ -71,6 +71,7 @@ var _sign_material: StandardMaterial3D = null
 var _interior_light: OmniLight3D = null
 
 @onready var _horn_player: AudioStreamPlayer3D = AudioStreamPlayer3D.new()
+var _engine_player: AudioStreamPlayer3D = null
 
 
 func _ready() -> void:
@@ -92,6 +93,8 @@ func _ready() -> void:
 	_horn_player.unit_size = 24.0
 	_horn_player.max_db = 3.0
 
+	_setup_engine_audio()
+
 	if GameState != null:
 		GameState.night_factor_changed.connect(_on_night_factor_changed)
 
@@ -104,13 +107,14 @@ func _physics_process(delta: float) -> void:
 	_update_fuel(delta)
 	_update_door(delta)
 	_update_wipers(delta)
+	_update_engine_audio(delta)
 
 
 func _update_steering(delta: float) -> void:
 	var target: float = clampf(steer_input, -1.0, 1.0)
 
 	# Steering authority shrinks with speed so the bus feels heavy.
-	var speed_factor: float = clampf(1.0 - speed_kmh / 140.0, 0.35, 1.0)
+	var speed_factor: float = clampf(1.0 - speed_kmh / 190.0, 0.55, 1.0)
 	target *= speed_factor
 
 	# The wheel is proportional: a small turn of the wheel is a small turn of
@@ -392,7 +396,7 @@ func _build_wheels() -> void:
 
 		wheel.wheel_radius = 0.52
 		wheel.wheel_rest_length = 0.3
-		wheel.wheel_friction_slip = 3.2
+		wheel.wheel_friction_slip = 4.0
 		wheel.suspension_stiffness = 25.0
 		wheel.suspension_travel = 0.32
 		wheel.suspension_max_force = 90000.0
@@ -932,5 +936,70 @@ func _make_horn_stream() -> AudioStream:
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = sample_rate
 	stream.stereo = false
+	stream.data = data
+	return stream
+
+
+func _setup_engine_audio() -> void:
+	## Looping diesel drone, generated procedurally so no audio file is needed.
+	var player: AudioStreamPlayer3D = AudioStreamPlayer3D.new()
+	player.name = "EngineAudio"
+	player.stream = _make_engine_stream()
+	player.unit_size = 14.0
+	player.max_db = -6.0
+	player.volume_db = -18.0
+	add_child(player)
+	_engine_player = player
+	player.play()
+
+
+func _update_engine_audio(_delta: float) -> void:
+	if _engine_player == null or not is_instance_valid(_engine_player):
+		return
+	var load_factor: float = clampf(throttle_input, 0.0, 1.0)
+	var speed_factor: float = clampf(speed_kmh / MAX_SPEED_KMH, 0.0, 1.0)
+
+	# Pitch rises with road speed and, a little, with throttle.
+	var pitch: float = 0.72 + speed_factor * 0.95 + load_factor * 0.18
+	_engine_player.pitch_scale = clampf(pitch, 0.6, 2.0)
+
+	var volume: float = -24.0 + load_factor * 12.0 + speed_factor * 8.0
+	if not engine_running:
+		volume = -60.0
+	_engine_player.volume_db = clampf(volume, -60.0, -4.0)
+
+
+func _make_engine_stream() -> AudioStream:
+	var sample_rate: int = 22050
+	# One second of seamless diesel rumble (harmonics of a low idle).
+	var frames: int = sample_rate
+	var data: PackedByteArray = PackedByteArray()
+	data.resize(frames * 2)
+
+	var i: int = 0
+	while i < frames:
+		var t: float = float(i) / float(sample_rate)
+		# Integer harmonics keep the loop seamless.
+		var wave: float = sin(TAU * 32.0 * t) * 0.55
+		wave += sin(TAU * 64.0 * t) * 0.28
+		wave += sin(TAU * 96.0 * t) * 0.16
+		wave += sin(TAU * 160.0 * t) * 0.07
+		# Slight roughness so it sounds mechanical rather than a pure tone.
+		wave += sin(TAU * 224.0 * t) * 0.05 * sin(TAU * 8.0 * t)
+		var value: float = clampf(wave * 0.42, -1.0, 1.0)
+		var sample: int = int(value * 30000.0)
+		if sample < 0:
+			sample += 65536
+		data[i * 2] = sample & 0xFF
+		data[i * 2 + 1] = (sample >> 8) & 0xFF
+		i += 1
+
+	var stream: AudioStreamWAV = AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = sample_rate
+	stream.stereo = false
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_begin = 0
+	stream.loop_end = frames
 	stream.data = data
 	return stream

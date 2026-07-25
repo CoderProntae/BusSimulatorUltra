@@ -31,6 +31,14 @@ window/stretch/aspect="expand"
 window/handheld/orientation=0
 window/vsync/vsync_mode=1
 
+[input_devices]
+
+; One finger must produce ONE event stream. With emulation on, a touch also
+; fires a synthetic mouse event, so two pointers drove the steering wheel at
+; once: it latched on release and jerked on the next grab.
+pointing/emulate_mouse_from_touch=false
+pointing/emulate_touch_from_mouse=true
+
 [input]
 
 steer_left={

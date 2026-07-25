@@ -15,6 +15,11 @@ const BUTTON_SIZE: float = 92.0
 ## Full lock is 160 degrees of wheel rotation in each direction.
 const MAX_WHEEL_ANGLE: float = 2.79
 const WHEEL_SIZE: float = 260.0
+## Radians per second the wheel graphic may travel. Caps how fast steering can
+## change, which is what removes the twitchy "spins by itself" feel.
+const WHEEL_FOLLOW_SPEED: float = 7.5
+## Self-centring speed when the wheel is released.
+const WHEEL_RETURN_SPEED: float = 4.2
 
 @export var bus_path: NodePath
 @export var camera_path: NodePath
@@ -28,6 +33,9 @@ var _wheel_texture: Node = null
 var _wheel_angle: float = 0.0
 var _steer_grab_angle: float = 0.0
 var _steer_grabbed: bool = false
+## Index of the ONE finger that owns the wheel. -99 means nobody.
+var _steer_pointer: int = -99
+var _wheel_target: float = 0.0
 var _steer_value: float = 0.0
 
 var _gas_button: PanelContainer = null
@@ -103,14 +111,18 @@ func _process(delta: float) -> void:
 
 
 func _update_wheel_return(delta: float) -> void:
-	## When nobody is holding the wheel it springs back to centre, like the
-	## caster action of a real bus.
-	if _has_zone(ZONE_STEER):
-		return
-	if absf(_wheel_angle) < 0.001:
-		return
-	var speed: float = MAX_WHEEL_ANGLE * 1.6 * delta
-	_wheel_angle = move_toward(_wheel_angle, 0.0, speed)
+	## Drives the visible wheel toward _wheel_target at a bounded speed, and
+	## springs back to centre when nobody is holding it. Doing the motion here
+	## (once per frame) instead of inside the input callback is what keeps the
+	## wheel smooth no matter how many events arrive.
+	var holding: bool = _steer_pointer != -99
+	if not holding:
+		_wheel_target = move_toward(_wheel_target, 0.0, WHEEL_RETURN_SPEED * delta)
+
+	var max_step: float = WHEEL_FOLLOW_SPEED * delta
+	_wheel_angle = _wheel_angle + clampf(_wheel_target - _wheel_angle, -max_step, max_step)
+	_wheel_angle = clampf(_wheel_angle, -MAX_WHEEL_ANGLE, MAX_WHEEL_ANGLE)
+
 	_steer_value = clampf(_wheel_angle / MAX_WHEEL_ANGLE, -1.0, 1.0)
 	_move_knob()
 
@@ -129,13 +141,11 @@ func _apply_inputs() -> void:
 	var steer: float = _steer_value
 	if absf(key_steer) > 0.01:
 		# Keyboard drives the same wheel so the graphic stays in sync.
-		_wheel_angle = clampf(
-			_wheel_angle + key_steer * MAX_WHEEL_ANGLE * 1.5 * get_process_delta_time(),
+		_wheel_target = clampf(
+			_wheel_target + key_steer * MAX_WHEEL_ANGLE * 1.2 * get_process_delta_time(),
 			-MAX_WHEEL_ANGLE,
 			MAX_WHEEL_ANGLE
 		)
-		_steer_value = clampf(_wheel_angle / MAX_WHEEL_ANGLE, -1.0, 1.0)
-		_move_knob()
 		steer = _steer_value
 
 	var throttle: float = 0.0
@@ -201,6 +211,9 @@ var _touch_zones: Dictionary = {}
 
 
 func _input(event: InputEvent) -> void:
+	# Touch only. emulate_touch_from_mouse=true turns desktop clicks into
+	# touch events, and emulate_mouse_from_touch=false stops a finger from
+	# also generating a mouse event, so every pointer is counted exactly once.
 	if event is InputEventScreenTouch:
 		var touch: InputEventScreenTouch = event as InputEventScreenTouch
 		if touch.pressed:
@@ -210,17 +223,6 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		var drag: InputEventScreenDrag = event as InputEventScreenDrag
 		_drag_at(drag.index, drag.position)
-	elif event is InputEventMouseButton:
-		var mb: InputEventMouseButton = event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				_press_at(-1, mb.position)
-			else:
-				_release_index(-1)
-	elif event is InputEventMouseMotion:
-		var mm: InputEventMouseMotion = event as InputEventMouseMotion
-		if _touch_zones.has(-1):
-			_drag_at(-1, mm.position)
 
 
 func _zone_at(pos: Vector2) -> int:
@@ -243,6 +245,11 @@ func _press_at(index: int, pos: Vector2) -> void:
 		return
 	_touch_zones[index] = zone
 	if zone == ZONE_STEER:
+		# Ignore extra fingers landing on the wheel while one already holds it.
+		if _steer_pointer != -99:
+			return
+		_steer_pointer = index
+		_steer_grabbed = false
 		_update_steer_from_global(pos)
 	_refresh_pedal_visuals()
 
@@ -252,6 +259,8 @@ func _drag_at(index: int, pos: Vector2) -> void:
 		return
 	var zone: int = int(_touch_zones[index])
 	if zone == ZONE_STEER:
+		if index != _steer_pointer:
+			return
 		_update_steer_from_global(pos)
 
 
@@ -260,8 +269,9 @@ func _release_index(index: int) -> void:
 		return
 	var zone: int = int(_touch_zones[index])
 	_touch_zones.erase(index)
-	if zone == ZONE_STEER and not _has_zone(ZONE_STEER):
+	if zone == ZONE_STEER and index == _steer_pointer:
 		# Let go of the wheel: it self-centres in _process().
+		_steer_pointer = -99
 		_steer_grabbed = false
 	_refresh_pedal_visuals()
 
@@ -278,33 +288,33 @@ func _has_zone(zone: int) -> bool:
 
 func _update_steer_from_global(global_pos: Vector2) -> void:
 	## A REAL steering wheel: the finger grabs a point on the rim and the wheel
-	## follows the angle of the drag around the hub. Turning it further turns
-	## the bus further (proportional), exactly like a physical wheel.
+	## follows the angle of the drag around the hub.
+	##
+	## This only sets a TARGET angle. _update_wheel_return() eases the wheel
+	## toward it at a bounded rate, so a jumpy or duplicated event can never
+	## make the wheel snap around.
 	if _steer_pad == null:
 		return
 	var rect: Rect2 = _steer_pad.get_global_rect()
 	var center: Vector2 = rect.position + rect.size * 0.5
 	var offset: Vector2 = global_pos - center
 
-	# Too close to the hub: no reliable angle, keep the current value.
-	if offset.length() < 18.0:
+	# Too close to the hub: no reliable angle.
+	if offset.length() < 26.0:
 		return
 
 	var angle: float = atan2(offset.y, offset.x)
 
 	if not _steer_grabbed:
 		_steer_grabbed = true
-		# Remember where the finger grabbed the rim relative to the current
-		# wheel angle, so the wheel does not jump on touch.
-		_steer_grab_angle = angle - _wheel_angle
+		# Anchor the grab so the wheel does not jump to the finger.
+		_steer_grab_angle = angle - _wheel_target
 		return
 
-	var delta_angle: float = angle_difference(_steer_grab_angle + _wheel_angle, angle)
-	_wheel_angle = _wheel_angle - delta_angle
-	_wheel_angle = clampf(_wheel_angle, -MAX_WHEEL_ANGLE, MAX_WHEEL_ANGLE)
-
-	_steer_value = clampf(_wheel_angle / MAX_WHEEL_ANGLE, -1.0, 1.0)
-	_move_knob()
+	var desired: float = angle - _steer_grab_angle
+	# Unwrap into the continuous range around the current target.
+	desired = _wheel_target + angle_difference(_wheel_target, desired)
+	_wheel_target = clampf(desired, -MAX_WHEEL_ANGLE, MAX_WHEEL_ANGLE)
 
 
 func _refresh_pedal_visuals() -> void:

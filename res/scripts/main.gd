@@ -1,35 +1,139 @@
 extends Node3D
 
-## Boot script: instantiates the world, spawns the bus at a road spawn point,
-## wires the camera + HUD together and keeps a ReflectionProbe near the bus
-## for crisp metal and glass reflections.
+## Boot flow:  MAIN MENU  ->  REAL LOADING  ->  GAME
+##
+## The loading screen is not a timer. Scenes are streamed on a background
+## thread and the city is built in stages across several frames, each stage
+## reporting genuine progress, so the bar tracks actual work.
 
 const WORLD_SCENE: String = "res://scenes/World.tscn"
 const BUS_SCENE: String = "res://scenes/Bus.tscn"
 const HUD_SCENE: String = "res://scenes/HUD.tscn"
 const CAMERA_SCRIPT: String = "res://scripts/camera_system.gd"
+const MENU_SCRIPT: String = "res://scripts/main_menu.gd"
+const LOADING_SCRIPT: String = "res://scripts/loading_screen.gd"
 const CITY_SCRIPT_NAME: String = "CityBuilder"
 
 var world: Node3D = null
 var bus: VehicleBody3D = null
 var camera_rig: Node3D = null
 var hud: Control = null
+
 var _probe: ReflectionProbe = null
+var _probe_accum: float = 0.0
+var _ui_layer: CanvasLayer = null
+var _menu: Control = null
+var _loader: Control = null
+var _game_started: bool = false
 
 
 func _ready() -> void:
 	randomize()
+	_ui_layer = CanvasLayer.new()
+	_ui_layer.name = "UILayer"
+	_ui_layer.layer = 10
+	add_child(_ui_layer)
+	_show_menu()
+
+
+# ---------------------------------------------------------------------------
+# Menu
+# ---------------------------------------------------------------------------
+
+func _show_menu() -> void:
+	var script: Script = _safe_script(MENU_SCRIPT)
+	var menu: Control = Control.new()
+	if script != null:
+		menu.set_script(script)
+	menu.name = "MainMenu"
+	_ui_layer.add_child(menu)
+	_menu = menu
+	if menu.has_signal("play_pressed"):
+		menu.connect("play_pressed", _on_play_pressed)
+
+
+func _on_play_pressed() -> void:
+	if _menu != null and is_instance_valid(_menu):
+		_menu.queue_free()
+		_menu = null
+	_show_loading()
+
+
+# ---------------------------------------------------------------------------
+# Loading
+# ---------------------------------------------------------------------------
+
+func _show_loading() -> void:
+	var script: Script = _safe_script(LOADING_SCRIPT)
+	var loader: Control = Control.new()
+	if script != null:
+		loader.set_script(script)
+	loader.name = "LoadingScreen"
+	_ui_layer.add_child(loader)
+	_loader = loader
+	if loader.has_signal("loading_finished"):
+		loader.connect("loading_finished", _on_loading_finished)
+	# Build the world in stages while the loading screen is up.
+	_build_game.call_deferred()
+
+
+func _report(value: float) -> void:
+	if _loader != null and is_instance_valid(_loader):
+		if _loader.has_method("report_build_progress"):
+			_loader.call("report_build_progress", value)
+
+
+func _build_game() -> void:
+	## Each stage yields a frame so the loading screen keeps animating and the
+	## progress it shows corresponds to work that has actually completed.
+	await get_tree().process_frame
 	_spawn_world()
+	_report(0.2)
+
+	await get_tree().process_frame
 	_spawn_bus()
+	_report(0.5)
+
+	await get_tree().process_frame
 	_spawn_camera()
+	_report(0.65)
+
+	await get_tree().process_frame
 	_spawn_hud()
+	_report(0.8)
+
+	await get_tree().process_frame
 	_spawn_reflection_probe()
 	_apply_renderer_safe_graphics()
+	if Settings != null:
+		Settings.apply_all()
+	_report(0.95)
+
+	# Let the physics server settle the freshly spawned bodies for a frame.
+	await get_tree().physics_frame
+	_report(1.0)
+
+
+func _on_loading_finished() -> void:
+	if _loader != null and is_instance_valid(_loader):
+		_loader.queue_free()
+		_loader = null
+	_game_started = true
+	_set_gameplay_visible(true)
 
 	if GameState != null:
 		GameState.reset()
 		GameState.notify("Welcome! Drive to a stop, open the doors, collect fares.")
 
+
+func _set_gameplay_visible(value: bool) -> void:
+	if hud != null and is_instance_valid(hud):
+		hud.visible = value
+
+
+# ---------------------------------------------------------------------------
+# Spawning
+# ---------------------------------------------------------------------------
 
 func _spawn_world() -> void:
 	var scene: PackedScene = _safe_scene(WORLD_SCENE)
@@ -107,6 +211,7 @@ func _spawn_hud() -> void:
 		return
 	hud = node as Control
 	hud.name = "HUD"
+	hud.visible = false
 	layer.add_child(hud)
 
 	if bus != null:
@@ -118,14 +223,18 @@ func _spawn_hud() -> void:
 func _spawn_reflection_probe() -> void:
 	if bus == null:
 		return
+	var enabled: bool = false
+	if Settings != null:
+		enabled = Settings.reflections_enabled
+	if not enabled:
+		return
+
 	var probe: ReflectionProbe = ReflectionProbe.new()
 	probe.name = "BusReflectionProbe"
 	probe.size = Vector3(46.0, 26.0, 46.0)
-	probe.origin_offset = Vector3(0.0, 0.0, 0.0)
 	probe.intensity = 1.0
 	probe.max_distance = 160.0
-	# UPDATE_ALWAYS re-renders the probe every frame, which is far too costly
-	# on mobile GPUs (a common source of tiling/corruption artifacts).
+	# UPDATE_ALWAYS re-renders every frame and is far too costly on mobile.
 	probe.update_mode = ReflectionProbe.UPDATE_ONCE
 	probe.interior = false
 	probe.enable_shadows = false
@@ -133,9 +242,6 @@ func _spawn_reflection_probe() -> void:
 	add_child(probe)
 	_probe = probe
 	probe.global_position = bus.global_position + Vector3(0.0, 6.0, 0.0)
-
-
-var _probe_accum: float = 0.0
 
 
 func _physics_process(delta: float) -> void:
@@ -158,9 +264,9 @@ func _physics_process(delta: float) -> void:
 func _apply_renderer_safe_graphics() -> void:
 	## Some post-processing effects are NOT supported outside the Forward+
 	## renderer. Leaving them on for the Mobile / Compatibility renderers makes
-	## phone GPUs sample undefined buffers, which shows up as heavy static /
-	## "ants" crawling over every 3D surface (the sky stays clean because it
-	## has no depth). Godot docs, renderer feature comparison:
+	## phone GPUs sample undefined buffers, which shows up as heavy static
+	## crawling over every 3D surface (the sky stays clean because it has no
+	## depth). Godot docs, renderer feature comparison:
 	##   Volumetric Fog  - Mobile: NO,  Compatibility: NO
 	##   SSR             - Mobile: NO,  Compatibility: NO
 	##   SSIL            - Mobile: NO,  Compatibility: NO

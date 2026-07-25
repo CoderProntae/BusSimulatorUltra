@@ -742,20 +742,38 @@ func _build_bus_stops() -> void:
 	var spots: Array[Vector3] = []
 	var rotations: Array[float] = []
 
+	## Stops must sit ON THE KERB, never in the roadway.
+	##  - offset sideways by half the road plus the pavement, so the shelter is
+	##    on the pavement and the bus pulls up alongside it
+	##  - placed MID-BLOCK (a road line +/- BLOCK_SIZE * 0.5), because a road
+	##    coordinate itself is an intersection
+	## The shelter is built on the -X side of the stop's local origin, so the
+	## origin is put on the road side of the kerb.
+	var kerb: float = ROAD_WIDTH * 0.5 + 2.2
+
+	# Stops beside the north-south roads (bus travels along Z).
 	var i: int = 0
 	while i < _road_positions_x.size():
 		var x: float = _road_positions_x[i]
-		spots.append(Vector3(x + ROAD_WIDTH * 0.5 + 2.6, 0.0, -BLOCK_SIZE * 0.5))
-		rotations.append(0.0)
-		spots.append(Vector3(x + ROAD_WIDTH * 0.5 + 2.6, 0.0, BLOCK_SIZE * 0.5))
-		rotations.append(0.0)
+		var j: int = 0
+		while j < _road_positions_z.size() - 1:
+			var mid_z: float = (_road_positions_z[j] + _road_positions_z[j + 1]) * 0.5
+			# Right-hand kerb for a bus driving +Z is -X.
+			spots.append(Vector3(x - kerb, 0.0, mid_z))
+			rotations.append(180.0)
+			j += 1
 		i += 1
 
+	# Stops beside the east-west roads (bus travels along X).
 	i = 0
 	while i < _road_positions_z.size():
 		var z: float = _road_positions_z[i]
-		spots.append(Vector3(-BLOCK_SIZE * 0.5, 0.0, z + ROAD_WIDTH * 0.5 + 2.6))
-		rotations.append(90.0)
+		var j2: int = 0
+		while j2 < _road_positions_x.size() - 1:
+			var mid_x: float = (_road_positions_x[j2] + _road_positions_x[j2 + 1]) * 0.5
+			spots.append(Vector3(mid_x, 0.0, z + kerb))
+			rotations.append(90.0)
+			j2 += 1
 		i += 1
 
 	var s: int = 0
