@@ -1,0 +1,61 @@
+name: Build APK
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download assets (CI has full internet)
+        run: |
+          set +e
+          mkdir -p res/assets/textures/asphalt res/assets/textures/concrete res/assets/textures/wall res/assets/environment res/assets/models
+          wget -L -q -O asphalt.zip "https://ambientcg.com/get?file=Asphalt030_1K-JPG.zip" && unzip -o -j asphalt.zip "*Color*.jpg" -d res/assets/textures/asphalt/ && unzip -o -j asphalt.zip "*Normal*.jpg" -d res/assets/textures/asphalt/ && unzip -o -j asphalt.zip "*Roughness*.jpg" -d res/assets/textures/asphalt/
+          wget -q -O concrete.zip "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/concrete_floor_02.zip" && unzip -o -j concrete.zip "*.jpg" -d res/assets/textures/concrete/
+          wget -q -O wall.zip "https://dl.polyhaven.org/file/ph-assets/Textures/zip/1k/brick_wall_001.zip" && unzip -o -j wall.zip "*.jpg" -d res/assets/textures/wall/
+          wget -q -O res/assets/environment/sky.hdr "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr"
+          wget -q -O res/assets/models/bus.glb "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb" || echo "bus fallback CSG"
+          (cd res/assets/textures/asphalt && for f in *Color*; do mv "$f" albedo.jpg; done; for f in *Normal*; do mv "$f" normal.jpg; done; for f in *Roughness*; do mv "$f" roughness.jpg; done) || true
+          (cd res/assets/textures/concrete && for f in *.jpg; do case "$f" in *[Cc]olor*|*albedo*) mv "$f" albedo.jpg ;; *[Nn]ormal*|*normal*) mv "$f" normal.jpg ;; esac; done) || true
+          (cd res/assets/textures/wall && for f in *.jpg; do case "$f" in *[Cc]olor*|*albedo*) mv "$f" albedo.jpg ;; *[Nn]ormal*|*normal*) mv "$f" normal.jpg ;; esac; done) || true
+          echo "---- downloaded assets ----"; find res/assets -type f -exec ls -la {} \;
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Download Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.4-stable/Godot_v4.4-stable_linux.x86_64.zip
+          unzip -o Godot_v4.4-stable_linux.x86_64.zip
+          mv Godot_v4.4-stable_linux.x86_64 godot && chmod +x godot
+      - name: Templates
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.4-stable/Godot_v4.4-stable_export_templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates/4.4.stable
+          unzip -o Godot_v4.4-stable_export_templates.tpz
+          mv templates/* ~/.local/share/godot/export_templates/4.4.stable/
+      - name: Keystore
+        run: keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Debug,O=Debug,C=US"
+      - name: Patch export preset
+        run: |
+          KEYSTORE_PATH=$(pwd)/debug.keystore
+          sed -i "s|custom_template/debug=\".*\"|custom_template/debug=\"\"|" export_presets.cfg
+          sed -i "s|custom_template/release=\".*\"|custom_template/release=\"\"|" export_presets.cfg
+          sed -i "s|keystore/debug=\".*\"|keystore/debug=\"$KEYSTORE_PATH\"|" export_presets.cfg
+          sed -i "s|keystore/debug_user=\".*\"|keystore/debug_user=\"androiddebugkey\"|" export_presets.cfg
+          sed -i "s|keystore/debug_password=\".*\"|keystore/debug_password=\"android\"|" export_presets.cfg
+          sed -i "s|keystore/release=\".*\"|keystore/release=\"\"|" export_presets.cfg
+          sed -i "s|keystore/release_user=\".*\"|keystore/release_user=\"\"|" export_presets.cfg
+          sed -i "s|keystore/release_password=\".*\"|keystore/release_password=\"\"|" export_presets.cfg
+      - name: Import
+        run: ./godot --headless --import --quit || true
+      - name: Export
+        run: ./godot --headless --export-debug "Android" BusSimulator.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BusSimulator-APK
+          path: BusSimulator.apk
+          retention-days: 30
