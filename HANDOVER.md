@@ -45,10 +45,10 @@ godot --path res
 
 | Sistem | Durum |
 |---|---|
-| 14 GDScript dosyası | Hepsi parse ediyor (gdparse ile doğrulandı) |
+| 15 GDScript dosyası | Hepsi parse ediyor (gdparse ile doğrulandı) |
 | CI / APK build | ✅ Çalışıyor |
 | APK boyutu | ~58 MB |
-| `python3 tools/verify_project.py` | **111/111 geçiyor** |
+| `python3 tools/verify_project.py` | **123/123 geçiyor** |
 | Ana menü | ✅ |
 | Gerçek yükleme ekranı | ✅ (sahte değil, ölçülü ilerleme) |
 | Grafik ayarları | ✅ `user://settings.cfg` |
@@ -97,6 +97,38 @@ girdi sadece hedef açı verir, 7.5 rad/s sınırıyla yaklaşılır.
 Kaldırım kenarına taşındı (yol merkezinden 9.2 m yana, blok ortasında).
 24 durak, en yakın kavşaktan 30 m.
 
+### 3.9 Ana menü sol üst köşeye çökmüştü
+
+`main_menu.gd` / `loading_screen.gd` `Control.new()` ile (0×0) yaratılıyor,
+`_ready()` içinde ise `set_anchors_preset(PRESET_FULL_RECT)` çağrılıyordu.
+Bu metodun varsayılanı `keep_offsets=false`'tur ve Godot bunu **"offsetleri
+yeniden hesapla ki kontrol şu anki dikdörtgenini korusun"** diye uygular
+(`Control::set_anchors_preset` → `set_anchor` → `_compute_offsets`).
+Node ağaç içinde ve 0×0 olduğu için 0×0 sadakatle korundu → başlık, düğmeler
+ve shader arka planı sol üst köşeye yığıldı. (Ekranda görünen mavi
+`default_clear_color`'dı, yani arka plan hiç çizilmemişti.)
+
+**Düzeltme:** üç UI kökünde de `set_anchors_and_offsets_preset()`.
+**Yeni bir tam ekran Control yaparsan hep bunu kullan.**
+
+### 3.10 Düğmeler dokunmayı almıyordu
+
+`BaseButton::gui_input()` yalnızca `InputEventMouseButton` (ve `ui_accept`)
+işler; `InputEventScreenTouch` dalı **yoktur**. Proje 3.6 yüzünden
+`emulate_mouse_from_touch=false` tutmak zorunda, dolayısıyla hiçbir Button
+parmağı görmüyordu. Emülasyonu geri açmak da çözüm değil: Godot mouse'u
+sadece **ilk** parmak için taklit eder, yani pedal basılıyken hiçbir düğme
+çalışmazdı.
+
+**Düzeltme:** `res/scripts/touch_button.gd` — dokunma akışını kendisi okuyan
+Button. Herhangi bir parmak, her an çalışır; `DEVICE_ID_EMULATION`
+olaylarını yok sayar (masaüstünde çift tetiklemeyi önler); `touch_modal`
+grubuna saygı duyar (ayar paneli açıkken arkası tıklanmaz).
+
+⚠️ **Oyuncunun basacağı her düğme `touch_button.gd` kullanmalı.**
+Menüde `_make_button()`, HUD'da `_make_touch_button()` fabrikalarından geç.
+`verify_project.py` içindeki `check_ui_contract()` bunu zorunlu kılar.
+
 ### 3.8 CI süt kamyonu indiriyordu
 `CesiumMilkTruck.glb` indirmesi kaldırıldı. Gerçek otobüs modeli istersen
 `res/assets/models/bus.glb` (önü **+Z**) koy, kod otomatik kullanır.
@@ -124,7 +156,7 @@ res/                       <- GODOT PROJE KÖKÜ
   project.godot            autoload: GameState, Settings
   export_presets.cfg       Android preset
   scenes/    Main, Bus, World, BusStop, TrafficCar, HUD
-  scripts/   14 dosya
+  scripts/   15 dosya
   materials/ asphalt, concrete, wall, sky (.tres)
   shaders/   window_grid.gdshader
   assets/    textures/, environment/sky.hdr
@@ -149,7 +181,9 @@ HANDOVER.md  bu dosya
 | `day_night_cycle.gd` | 204 | 5 dk gece/gündüz |
 | `camera_system.gd` | 197 | 3 kamera modu |
 | `game_state.gd` | 157 | Ekonomi/yakıt/yolcu (autoload) |
+| `touch_button.gd` | 126 | Dokunma alan Button (bkz. 3.10) |
 | `street_lamp.gd` | 19 | Sokak lambası |
+| `touch_button.gd` | 130 | Dokunma alan Button (bkz. 3.10) |
 
 ---
 
