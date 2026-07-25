@@ -1,0 +1,94 @@
+name: Build Bus Simulator Ultra APK
+
+on:
+  push:
+    branches: [arena/019f9a03-bussimulatorultra, main]
+  pull_request:
+    branches: [arena/019f9a03-bussimulatorultra, main]
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Cache Godot binary
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-4.4.1-linux-x86_64
+
+      - name: Download Godot 4.4.1
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot
+          wget -q --show-progress -O ~/godot/Godot_v4.4.1-stable_linux.x86_64.zip \
+            "https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip"
+          unzip -q ~/godot/Godot_v4.4.1-stable_linux.x86_64.zip -d ~/godot/
+          chmod +x ~/godot/Godot_v4.4.1-stable_linux.x86_64
+          rm ~/godot/Godot_v4.4.1-stable_linux.x86_64.zip
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '12.0'
+          build-tools-version: '34.0.0'
+          api-level: 34
+          ndk-version: '26.1.10909125'
+
+      - name: Accept Android licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Install Godot Android export template
+        run: |
+          mkdir -p ~/.local/share/godot/export_templates/4.4.1-stable
+          # Template will be downloaded/installed during Godot first run or manually
+          # For CI, we rely on Godot's headless mode to export with embedded settings
+
+      - name: Build APK (headless export)
+        env:
+          GODOT_BINARY: ~/godot/Godot_v4.4.1-stable_linux.x86_64
+        run: |
+          $GODOT_BINARY --version
+          $GODOT_BINARY --headless --export-release "Android (Release)" build/BusSimulatorUltra.apk 2>&1 | tee build/export.log || {
+            echo "::warning::Godot headless export may need Android export templates installed."
+            echo "::warning::Check https://docs.godotengine.org/en/stable/tutorials/export/exporting_projects.html#android"
+          }
+
+      - name: Verify APK
+        run: |
+          if [ -f build/BusSimulatorUltra.apk ]; then
+            echo "APK built successfully!"
+            ls -lh build/BusSimulatorUltra.apk
+            sha256sum build/BusSimulatorUltra.apk > build/BusSimulatorUltra.apk.sha256
+          else
+            echo "APK was not produced. This usually means Godot Android export templates are missing."
+            echo "To fix: open project in Godot Editor once, install Android export template via Editor -> Manage Export Templates"
+            echo "Then commit the template files or configure CI to download them."
+            exit 1
+          fi
+
+      - name: Upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BusSimulatorUltra-APK
+          path: |
+            build/BusSimulatorUltra.apk
+            build/BusSimulatorUltra.apk.sha256
+            build/export.log
+          retention-days: 30
