@@ -209,6 +209,9 @@ func _add_dash(parent: Node3D, pos: Vector3, size: Vector3) -> void:
 	mesh.size = size
 	dash.mesh = mesh
 	dash.position = pos
+	dash.visibility_range_end = 130.0
+	dash.visibility_range_end_margin = 15.0
+	dash.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	parent.add_child(dash)
 
 
@@ -312,6 +315,9 @@ func _add_zebra(parent: Node3D, center: Vector3, horizontal: bool, mat: Material
 			stripe.position = center + Vector3(0.0, 0.0, offset)
 		stripe.mesh = mesh
 		stripe.set_surface_override_material(0, mat)
+		stripe.visibility_range_end = 120.0
+		stripe.visibility_range_end_margin = 15.0
+		stripe.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		parent.add_child(stripe)
 		s += 1
 
@@ -362,6 +368,10 @@ func _build_block_buildings(parent: Node3D, cx: float, cz: float, bx: int, bz: i
 
 		var mat: Material = _make_facade_material(w, h, i + bx * 7 + bz * 13)
 		building.set_surface_override_material(0, mat)
+		# Cull distant buildings: the single biggest mobile draw-call saving.
+		building.visibility_range_end = 320.0
+		building.visibility_range_end_margin = 30.0
+		building.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		parent.add_child(building)
 
 		var shape: CollisionShape3D = CollisionShape3D.new()
@@ -431,6 +441,9 @@ func _build_rooftop(parent: Node3D, base_pos: Vector3, w: float, d: float, h: fl
 		box_node.mesh = mesh
 		box_node.position = Vector3(base_pos.x + ox, h + bh * 0.5, base_pos.z + oz)
 		box_node.set_surface_override_material(0, roof_mat)
+		box_node.visibility_range_end = 180.0
+		box_node.visibility_range_end_margin = 20.0
+		box_node.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		parent.add_child(box_node)
 		i += 1
 
@@ -511,6 +524,9 @@ func _add_tree(pos: Vector3, node_name: String) -> void:
 			_rng.randf_range(-0.6, 0.6)
 		)
 		foliage.set_surface_override_material(0, leaf_mat)
+		foliage.visibility_range_end = 150.0
+		foliage.visibility_range_end_margin = 20.0
+		foliage.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		tree.add_child(foliage)
 		c += 1
 
@@ -523,6 +539,11 @@ func _build_street_lamps() -> void:
 	var lamps: Node3D = Node3D.new()
 	lamps.name = "StreetLamps"
 	add_child(lamps)
+
+	# Skip street lamps entirely on the low preset.
+	if Settings != null:
+		if not Settings.street_lamps_enabled:
+			return
 
 	var extent: float = _city_extent - 4.0
 	var i: int = 0
@@ -605,6 +626,9 @@ func _add_lamp(parent: Node3D, pos: Vector3, y_rotation: float) -> void:
 
 	var light: OmniLight3D = OmniLight3D.new()
 	light.name = "Light"
+	light.distance_fade_enabled = true
+	light.distance_fade_begin = 55.0
+	light.distance_fade_length = 20.0
 	light.position = Vector3(-1.7, 6.5, 0.0)
 	light.light_color = Color(1.0, 0.86, 0.62)
 	light.light_energy = 0.0
@@ -788,8 +812,13 @@ func _build_traffic() -> void:
 	if loop.size() < 2:
 		return
 
+	# Let the graphics settings decide how much traffic to simulate.
+	var count: int = traffic_count
+	if Settings != null:
+		count = maxi(1, Settings.traffic_count)
+
 	var i: int = 0
-	while i < traffic_count:
+	while i < count:
 		var car: Node = null
 		if scene != null:
 			car = scene.instantiate()
@@ -809,7 +838,7 @@ func _build_traffic() -> void:
 
 		holder.add_child(car)
 
-		var start_index: int = int(float(i) * float(loop.size()) / float(traffic_count))
+		var start_index: int = int(float(i) * float(loop.size()) / float(count))
 		if car.has_method("setup_route"):
 			car.call("setup_route", loop, start_index)
 		elif car is Node3D:

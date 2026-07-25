@@ -58,10 +58,10 @@ adjustment_saturation = 1.08
 
 [node name="World" type="Node3D"]
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." groups=["world_environment"]]
 environment = SubResource("Environment_main")
 
-[node name="Sun" type="DirectionalLight3D" parent="."]
+[node name="Sun" type="DirectionalLight3D" parent="." groups=["sun"]]
 transform = Transform3D(0.85, -0.3, 0.43, 0, 0.82, 0.57, -0.53, -0.48, 0.7, 0, 60, 0)
 light_color = Color(1, 0.96, 0.88, 1)
 light_energy = 1.3

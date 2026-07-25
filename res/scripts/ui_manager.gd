@@ -12,6 +12,9 @@ const PAD_SIZE: float = 300.0
 const PEDAL_W: float = 150.0
 const PEDAL_H: float = 150.0
 const BUTTON_SIZE: float = 92.0
+## Full lock is 160 degrees of wheel rotation in each direction.
+const MAX_WHEEL_ANGLE: float = 2.79
+const WHEEL_SIZE: float = 260.0
 
 @export var bus_path: NodePath
 @export var camera_path: NodePath
@@ -21,6 +24,10 @@ var camera_system: Node = null
 
 var _steer_pad: Control = null
 var _steer_knob: Control = null
+var _wheel_texture: Node = null
+var _wheel_angle: float = 0.0
+var _steer_grab_angle: float = 0.0
+var _steer_grabbed: bool = false
 var _steer_value: float = 0.0
 
 var _gas_button: PanelContainer = null
@@ -40,6 +47,9 @@ var _door_button: Button = null
 var _light_button: Button = null
 
 var _notify_timer: float = 0.0
+var _settings_panel: Panel = null
+var _fps_label: Label = null
+var _settings_rows: Dictionary = {}
 
 
 func _ready() -> void:
@@ -53,6 +63,8 @@ func _ready() -> void:
 	_build_pedals()
 	_build_action_buttons()
 	_build_notifications()
+	_build_fps_counter()
+	_build_settings_menu()
 
 	if GameState != null:
 		GameState.money_changed.connect(_on_money_changed)
@@ -79,13 +91,28 @@ func _process(delta: float) -> void:
 	if bus == null or not is_instance_valid(bus):
 		_resolve_refs()
 
+	_update_wheel_return(delta)
 	_apply_inputs()
 	_update_readouts()
+	_update_fps()
 
 	if _notify_timer > 0.0:
 		_notify_timer -= delta
 		if _notify_timer <= 0.0 and _notify_label != null:
 			_notify_label.text = ""
+
+
+func _update_wheel_return(delta: float) -> void:
+	## When nobody is holding the wheel it springs back to centre, like the
+	## caster action of a real bus.
+	if _has_zone(ZONE_STEER):
+		return
+	if absf(_wheel_angle) < 0.001:
+		return
+	var speed: float = MAX_WHEEL_ANGLE * 1.6 * delta
+	_wheel_angle = move_toward(_wheel_angle, 0.0, speed)
+	_steer_value = clampf(_wheel_angle / MAX_WHEEL_ANGLE, -1.0, 1.0)
+	_move_knob()
 
 
 func _apply_inputs() -> void:
@@ -101,7 +128,15 @@ func _apply_inputs() -> void:
 
 	var steer: float = _steer_value
 	if absf(key_steer) > 0.01:
-		steer = key_steer
+		# Keyboard drives the same wheel so the graphic stays in sync.
+		_wheel_angle = clampf(
+			_wheel_angle + key_steer * MAX_WHEEL_ANGLE * 1.5 * get_process_delta_time(),
+			-MAX_WHEEL_ANGLE,
+			MAX_WHEEL_ANGLE
+		)
+		_steer_value = clampf(_wheel_angle / MAX_WHEEL_ANGLE, -1.0, 1.0)
+		_move_knob()
+		steer = _steer_value
 
 	var throttle: float = 0.0
 	if _has_zone(ZONE_GAS):
@@ -189,6 +224,10 @@ func _input(event: InputEvent) -> void:
 
 
 func _zone_at(pos: Vector2) -> int:
+	# While the settings panel is open the driving controls are inert, so
+	# tapping a menu button cannot also yank the steering wheel.
+	if _settings_panel != null and _settings_panel.visible:
+		return ZONE_NONE
 	if _steer_pad != null and _steer_pad.get_global_rect().has_point(pos):
 		return ZONE_STEER
 	if _gas_button != null and _gas_button.get_global_rect().has_point(pos):
@@ -222,8 +261,8 @@ func _release_index(index: int) -> void:
 	var zone: int = int(_touch_zones[index])
 	_touch_zones.erase(index)
 	if zone == ZONE_STEER and not _has_zone(ZONE_STEER):
-		_steer_value = 0.0
-		_move_knob()
+		# Let go of the wheel: it self-centres in _process().
+		_steer_grabbed = false
 	_refresh_pedal_visuals()
 
 
@@ -238,12 +277,33 @@ func _has_zone(zone: int) -> bool:
 
 
 func _update_steer_from_global(global_pos: Vector2) -> void:
+	## A REAL steering wheel: the finger grabs a point on the rim and the wheel
+	## follows the angle of the drag around the hub. Turning it further turns
+	## the bus further (proportional), exactly like a physical wheel.
 	if _steer_pad == null:
 		return
 	var rect: Rect2 = _steer_pad.get_global_rect()
-	var center_x: float = rect.position.x + rect.size.x * 0.5
-	var max_dx: float = maxf(rect.size.x * 0.5 - 20.0, 1.0)
-	_steer_value = clampf((global_pos.x - center_x) / max_dx, -1.0, 1.0)
+	var center: Vector2 = rect.position + rect.size * 0.5
+	var offset: Vector2 = global_pos - center
+
+	# Too close to the hub: no reliable angle, keep the current value.
+	if offset.length() < 18.0:
+		return
+
+	var angle: float = atan2(offset.y, offset.x)
+
+	if not _steer_grabbed:
+		_steer_grabbed = true
+		# Remember where the finger grabbed the rim relative to the current
+		# wheel angle, so the wheel does not jump on touch.
+		_steer_grab_angle = angle - _wheel_angle
+		return
+
+	var delta_angle: float = angle_difference(_steer_grab_angle + _wheel_angle, angle)
+	_wheel_angle = _wheel_angle - delta_angle
+	_wheel_angle = clampf(_wheel_angle, -MAX_WHEEL_ANGLE, MAX_WHEEL_ANGLE)
+
+	_steer_value = clampf(_wheel_angle / MAX_WHEEL_ANGLE, -1.0, 1.0)
 	_move_knob()
 
 
@@ -266,14 +326,10 @@ func _refresh_pedal_visuals() -> void:
 
 
 func _move_knob() -> void:
-	if _steer_knob == null or _steer_pad == null:
+	# Spin the wheel texture to match the current steering angle.
+	if _wheel_texture == null or not is_instance_valid(_wheel_texture):
 		return
-	var size: Vector2 = _steer_pad.size
-	var knob_size: Vector2 = _steer_knob.size
-	var travel: float = size.x * 0.5 - knob_size.x * 0.5 - 10.0
-	var x: float = size.x * 0.5 - knob_size.x * 0.5 + _steer_value * travel
-	var y: float = size.y * 0.5 - knob_size.y * 0.5
-	_steer_knob.position = Vector2(x, y)
+	_wheel_texture.rotation = _wheel_angle
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -518,38 +574,79 @@ func _build_speedometer() -> void:
 
 
 func _build_steering_pad() -> void:
-	var pad: PanelContainer = PanelContainer.new()
-	pad.name = "SteerPad"
+	## A real steering wheel drawn with a shader: outer rim, three spokes and a
+	## hub. The whole texture rotates with _wheel_angle.
+	var pad: Control = Control.new()
+	pad.name = "SteerWheel"
 	pad.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	pad.offset_left = 24.0
-	pad.offset_right = 24.0 + PAD_SIZE
-	pad.offset_top = -(PAD_SIZE * 0.52) - 24.0
-	pad.offset_bottom = -24.0
+	pad.offset_left = 20.0
+	pad.offset_right = 20.0 + WHEEL_SIZE
+	pad.offset_top = -WHEEL_SIZE - 18.0
+	pad.offset_bottom = -18.0
 	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pad.add_theme_stylebox_override("panel", _make_panel_style(Color(0.08, 0.10, 0.14, 0.42), 80))
 	add_child(pad)
 	_steer_pad = pad
 
-	var hint: Label = Label.new()
-	hint.text = "STEER"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	hint.add_theme_font_size_override("font_size", 18)
-	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.35))
-	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pad.add_child(hint)
+	var wheel: ColorRect = ColorRect.new()
+	wheel.name = "WheelGraphic"
+	wheel.size = Vector2(WHEEL_SIZE, WHEEL_SIZE)
+	wheel.position = Vector2.ZERO
+	wheel.pivot_offset = Vector2(WHEEL_SIZE * 0.5, WHEEL_SIZE * 0.5)
+	wheel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	var knob: Panel = Panel.new()
-	knob.name = "Knob"
-	knob.custom_minimum_size = Vector2(84.0, 84.0)
-	knob.size = Vector2(84.0, 84.0)
-	knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	knob.add_theme_stylebox_override("panel", _make_panel_style(Color(0.85, 0.90, 1.0, 0.55), 42))
-	pad.add_child(knob)
-	_steer_knob = knob
+	var shader: Shader = Shader.new()
+	shader.code = _wheel_shader_code()
+	var mat: ShaderMaterial = ShaderMaterial.new()
+	mat.shader = shader
+	wheel.material = mat
 
-	await get_tree().process_frame
-	_move_knob()
+	pad.add_child(wheel)
+	_wheel_texture = wheel
+	_steer_knob = wheel
+
+
+func _wheel_shader_code() -> String:
+	var lines: Array[String] = [
+		"shader_type canvas_item;",
+		"",
+		"// Procedural bus steering wheel: rim, hub and three spokes.",
+		"",
+		"void fragment() {",
+		"\tvec2 p = UV - vec2(0.5);",
+		"\tfloat r = length(p) * 2.0;",
+		"\tfloat a = atan(p.y, p.x);",
+		"",
+		"\tfloat aa = fwidth(r) * 2.0;",
+		"",
+		"\t// outer rim",
+		"\tfloat rim = smoothstep(1.0, 1.0 - aa, r) * smoothstep(0.74 - aa, 0.74, r);",
+		"",
+		"\t// hub in the middle",
+		"\tfloat hub = smoothstep(0.30, 0.30 - aa, r);",
+		"",
+		"\t// three spokes: two lower, one upper",
+		"\tfloat spokes = 0.0;",
+		"\tfloat band = 0.16;",
+		"\tfloat sa = abs(sin(a * 1.5));",
+		"\tfloat spoke_mask = smoothstep(band, band - 0.05, abs(cos(a * 1.5)));",
+		"\tspokes = spoke_mask * smoothstep(0.78, 0.74, r) * smoothstep(0.24, 0.30, r);",
+		"",
+		"\tfloat wheel = clamp(rim + hub + spokes, 0.0, 1.0);",
+		"",
+		"\t// shading: lighter at the top for a rubbery highlight",
+		"\tvec3 dark = vec3(0.07, 0.075, 0.09);",
+		"\tvec3 light = vec3(0.24, 0.25, 0.29);",
+		"\tvec3 col = mix(dark, light, clamp(0.5 - p.y * 1.4, 0.0, 1.0));",
+		"",
+		"\t// chrome ring accent on the hub",
+		"\tfloat ring = smoothstep(0.30, 0.28, r) * smoothstep(0.20, 0.22, r);",
+		"\tcol = mix(col, vec3(0.55, 0.58, 0.64), ring * 0.9);",
+		"",
+		"\tCOLOR = vec4(col, wheel * 0.88);",
+		"}",
+		"",
+	]
+	return "\n".join(lines)
 
 
 func _build_pedals() -> void:
@@ -642,3 +739,211 @@ func _build_notifications() -> void:
 	_notify_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_notify_label.text = ""
 	add_child(_notify_label)
+
+
+# ---------------------------------------------------------------------------
+# FPS counter + graphics settings menu
+# ---------------------------------------------------------------------------
+
+func _build_fps_counter() -> void:
+	_fps_label = Label.new()
+	_fps_label.name = "FpsLabel"
+	_fps_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_fps_label.offset_left = 22.0
+	_fps_label.offset_top = 86.0
+	_fps_label.offset_right = 200.0
+	_fps_label.offset_bottom = 112.0
+	_fps_label.add_theme_font_size_override("font_size", 18)
+	_fps_label.add_theme_color_override("font_color", Color(0.6, 1.0, 0.7))
+	_fps_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_fps_label.add_theme_constant_override("outline_size", 5)
+	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fps_label.visible = false
+	add_child(_fps_label)
+
+
+func _update_fps() -> void:
+	if _fps_label == null:
+		return
+	var want: bool = false
+	if Settings != null:
+		want = Settings.show_fps
+	_fps_label.visible = want
+	if not want:
+		return
+	_fps_label.text = str(Engine.get_frames_per_second()) + " FPS"
+
+
+func _build_settings_menu() -> void:
+	# Gear button, top-right corner.
+	var gear: Button = Button.new()
+	gear.name = "SettingsButton"
+	gear.text = "SETTINGS"
+	gear.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	gear.offset_left = -150.0
+	gear.offset_right = -18.0
+	gear.offset_top = 86.0
+	gear.offset_bottom = 130.0
+	_style_button(gear, Color(0.16, 0.18, 0.24, 0.8))
+	gear.add_theme_font_size_override("font_size", 16)
+	gear.pressed.connect(_toggle_settings)
+	add_child(gear)
+
+	var panel: Panel = Panel.new()
+	panel.name = "SettingsPanel"
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.offset_left = -260.0
+	panel.offset_right = 260.0
+	panel.offset_top = -215.0
+	panel.offset_bottom = 215.0
+	panel.add_theme_stylebox_override("panel",
+		_make_panel_style(Color(0.05, 0.06, 0.09, 0.96), 18))
+	panel.visible = false
+	add_child(panel)
+	_settings_panel = panel
+
+	var box: VBoxContainer = VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 18.0
+	box.offset_right = -18.0
+	box.offset_top = 14.0
+	box.offset_bottom = -14.0
+	box.add_theme_constant_override("separation", 8)
+	panel.add_child(box)
+
+	var title: Label = Label.new()
+	title.text = "GRAPHICS SETTINGS"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color(0.65, 0.85, 1.0))
+	box.add_child(title)
+
+	_add_setting_row(box, "quality", "Quality", _on_quality_pressed)
+	_add_setting_row(box, "scale", "Resolution", _on_scale_pressed)
+	_add_setting_row(box, "shadows", "Shadows", _on_shadows_pressed)
+	_add_setting_row(box, "glow", "Bloom / Glow", _on_glow_pressed)
+	_add_setting_row(box, "fog", "Fog", _on_fog_pressed)
+	_add_setting_row(box, "fps_cap", "FPS Limit", _on_fps_cap_pressed)
+	_add_setting_row(box, "fps_show", "Show FPS", _on_fps_show_pressed)
+
+	var close: Button = Button.new()
+	close.text = "CLOSE"
+	close.custom_minimum_size = Vector2(0.0, 46.0)
+	_style_button(close, Color(0.35, 0.16, 0.18, 0.85))
+	close.pressed.connect(_toggle_settings)
+	box.add_child(close)
+
+	_refresh_settings_labels()
+
+
+func _add_setting_row(parent: Node, key: String, label_text: String,
+		handler: Callable) -> void:
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+
+	var name_label: Label = Label.new()
+	name_label.text = label_text
+	name_label.custom_minimum_size = Vector2(210.0, 40.0)
+	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_label.add_theme_font_size_override("font_size", 18)
+	row.add_child(name_label)
+
+	var value_button: Button = Button.new()
+	value_button.text = "-"
+	value_button.custom_minimum_size = Vector2(230.0, 40.0)
+	value_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(value_button, Color(0.14, 0.28, 0.42, 0.85))
+	value_button.add_theme_font_size_override("font_size", 17)
+	value_button.pressed.connect(handler)
+	row.add_child(value_button)
+
+	_settings_rows[key] = value_button
+
+
+func _toggle_settings() -> void:
+	if _settings_panel == null:
+		return
+	_settings_panel.visible = not _settings_panel.visible
+	if _settings_panel.visible:
+		_refresh_settings_labels()
+
+
+func _on_off_text(value: bool) -> String:
+	if value:
+		return "ON"
+	return "OFF"
+
+
+func _refresh_settings_labels() -> void:
+	if Settings == null:
+		return
+	if _settings_rows.has("quality"):
+		_settings_rows["quality"].text = Settings.quality_name()
+	if _settings_rows.has("scale"):
+		var pct: int = int(round(Settings.render_scale * 100.0))
+		_settings_rows["scale"].text = str(pct) + " %"
+	if _settings_rows.has("shadows"):
+		_settings_rows["shadows"].text = _on_off_text(Settings.shadows_enabled)
+	if _settings_rows.has("glow"):
+		_settings_rows["glow"].text = _on_off_text(Settings.glow_enabled)
+	if _settings_rows.has("fog"):
+		_settings_rows["fog"].text = _on_off_text(Settings.fog_enabled)
+	if _settings_rows.has("fps_cap"):
+		_settings_rows["fps_cap"].text = Settings.fps_label()
+	if _settings_rows.has("fps_show"):
+		_settings_rows["fps_show"].text = _on_off_text(Settings.show_fps)
+
+
+func _on_quality_pressed() -> void:
+	if Settings == null:
+		return
+	var next: int = Settings.quality + 1
+	if next > 2:
+		next = 0
+	Settings.set_quality(next)
+	_refresh_settings_labels()
+	if GameState != null:
+		GameState.notify("Quality: " + Settings.quality_name())
+
+
+func _on_scale_pressed() -> void:
+	if Settings == null:
+		return
+	Settings.cycle_render_scale()
+	_refresh_settings_labels()
+
+
+func _on_shadows_pressed() -> void:
+	if Settings == null:
+		return
+	Settings.toggle_shadows()
+	_refresh_settings_labels()
+
+
+func _on_glow_pressed() -> void:
+	if Settings == null:
+		return
+	Settings.toggle_glow()
+	_refresh_settings_labels()
+
+
+func _on_fog_pressed() -> void:
+	if Settings == null:
+		return
+	Settings.toggle_fog()
+	_refresh_settings_labels()
+
+
+func _on_fps_cap_pressed() -> void:
+	if Settings == null:
+		return
+	Settings.cycle_target_fps()
+	_refresh_settings_labels()
+
+
+func _on_fps_show_pressed() -> void:
+	if Settings == null:
+		return
+	Settings.toggle_fps_counter()
+	_refresh_settings_labels()

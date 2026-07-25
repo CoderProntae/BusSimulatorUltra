@@ -113,11 +113,20 @@ func _update_steering(delta: float) -> void:
 	var speed_factor: float = clampf(1.0 - speed_kmh / 140.0, 0.35, 1.0)
 	target *= speed_factor
 
+	# The wheel is proportional: a small turn of the wheel is a small turn of
+	# the bus. Ease the input slightly so the centre is precise while the
+	# extremes still reach full lock.
+	var eased: float = target * (0.55 + 0.45 * absf(target))
+
 	var rate: float = STEER_SPEED
-	if absf(target) < 0.05:
+	if absf(eased) < 0.05:
 		rate = STEER_RETURN_SPEED
-	_steer_current = move_toward(_steer_current, target, rate * delta)
-	steering = _steer_current * MAX_STEER_ANGLE
+	_steer_current = move_toward(_steer_current, eased, rate * delta)
+
+	# SIGN: the bus faces +Z, so its right side is -X. Rotating a +Z vector by
+	# a POSITIVE angle around +Y swings it toward +X, i.e. to the LEFT.
+	# steer_input > 0 means the player steered RIGHT, so the angle is negated.
+	steering = -_steer_current * MAX_STEER_ANGLE
 
 
 func _update_drive(_delta: float) -> void:
