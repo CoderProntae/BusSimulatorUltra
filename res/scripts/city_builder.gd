@@ -53,6 +53,11 @@ func _ready() -> void:
 
 
 func build_city() -> void:
+	# Wipe any stop registered by a previous city, otherwise the HUD map
+	# would keep pointing at markers that no longer exist.
+	if GameState != null:
+		GameState.clear_stops()
+
 	_asphalt = _safe_load_material(ASPHALT_PATH, Color(0.32, 0.33, 0.35))
 	_concrete = _safe_load_material(CONCRETE_PATH, Color(0.72, 0.71, 0.68))
 	_wall = _safe_load_material(WALL_PATH, Color(0.70, 0.45, 0.36))
@@ -786,7 +791,11 @@ func _build_bus_stops() -> void:
 
 		# Set exported properties BEFORE add_child so _ready() sees them.
 		if "stop_name" in stop:
-			stop.set("stop_name", STOP_NAMES[_stop_index % STOP_NAMES.size()])
+			# Names MUST be unique: the HUD map and the passenger ticketing
+			# both look stops up by name. There are 24 stops but only 8 base
+			# names, so plain "% size" gave three different places all called
+			# "Riverside" and the map would point at the wrong one.
+			stop.set("stop_name", _unique_stop_name(_stop_index))
 			_stop_index += 1
 		if stop is Node3D:
 			var stop3d: Node3D = stop as Node3D
@@ -795,6 +804,18 @@ func _build_bus_stops() -> void:
 
 		holder.add_child(stop)
 		s += 1
+
+
+func _unique_stop_name(index: int) -> String:
+	## "Riverside", then "Riverside North", then "Riverside East" ... so every
+	## stop in the city has a name of its own.
+	var base: String = STOP_NAMES[index % STOP_NAMES.size()]
+	var lap: int = index / STOP_NAMES.size()
+	if lap == 0:
+		return base
+	var suffixes: Array[String] = ["North", "East", "South", "West", "Central"]
+	var suffix: String = suffixes[(lap - 1) % suffixes.size()]
+	return base + " " + suffix
 
 
 func _make_runtime_stop() -> Node:

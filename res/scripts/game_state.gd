@@ -11,6 +11,9 @@ signal delivered_changed(total: int)
 signal notification_posted(text: String)
 signal night_factor_changed(night: float)
 signal time_of_day_changed(hours: float)
+## Emitted whenever the set of destinations onboard changes, so the HUD map
+## and the objective banner can update.
+signal destinations_changed()
 
 const START_MONEY: int = 500
 const FUEL_CAPACITY: float = 300.0
@@ -32,6 +35,13 @@ var clock_hours: float = 8.0
 
 var _notify_history: Array[String] = []
 
+## Every bus stop in the city, registered by BusStop nodes as they spawn.
+## Each entry: { "name": String, "position": Vector3, "node": Node }
+var stops: Array[Dictionary] = []
+## How many onboard passengers are travelling to each stop name.
+## Key: stop name (String) -> value: passenger count (int).
+var destinations: Dictionary = {}
+
 
 func _ready() -> void:
 	reset()
@@ -42,11 +52,96 @@ func reset() -> void:
 	fuel = FUEL_CAPACITY
 	passengers_onboard = 0
 	passengers_delivered = 0
+	destinations.clear()
 	_notify_history.clear()
 	emit_signal("money_changed", money)
 	emit_signal("fuel_changed", fuel, fuel_ratio())
 	emit_signal("passengers_changed", passengers_onboard, capacity)
 	emit_signal("delivered_changed", passengers_delivered)
+	emit_signal("destinations_changed")
+
+
+# ---------------------------------------------------------------------------
+# Stop registry + passenger destinations (drives the HUD map)
+# ---------------------------------------------------------------------------
+
+func register_stop(stop_name: String, position: Vector3, node: Node) -> void:
+	var entry: Dictionary = {}
+	entry["name"] = stop_name
+	entry["position"] = position
+	entry["node"] = node
+	stops.append(entry)
+
+
+func clear_stops() -> void:
+	stops.clear()
+	destinations.clear()
+	emit_signal("destinations_changed")
+
+
+func stop_position(stop_name: String) -> Vector3:
+	var i: int = 0
+	while i < stops.size():
+		var entry: Dictionary = stops[i]
+		if String(entry.get("name", "")) == stop_name:
+			return entry.get("position", Vector3.ZERO)
+		i += 1
+	return Vector3.ZERO
+
+
+func pick_destination(exclude_name: String) -> String:
+	## Chooses a stop for a boarding passenger, never the one they are
+	## standing at.
+	if stops.is_empty():
+		return ""
+	var candidates: Array[String] = []
+	var i: int = 0
+	while i < stops.size():
+		var entry: Dictionary = stops[i]
+		var name_value: String = String(entry.get("name", ""))
+		if name_value != "" and name_value != exclude_name:
+			candidates.append(name_value)
+		i += 1
+	if candidates.is_empty():
+		return ""
+	return candidates[randi() % candidates.size()]
+
+
+func add_destination(stop_name: String, count: int) -> void:
+	if stop_name == "" or count <= 0:
+		return
+	var current: int = int(destinations.get(stop_name, 0))
+	destinations[stop_name] = current + count
+	emit_signal("destinations_changed")
+
+
+func passengers_for(stop_name: String) -> int:
+	return int(destinations.get(stop_name, 0))
+
+
+func take_destination(stop_name: String, count: int) -> int:
+	## Removes up to `count` passengers bound for this stop, returning how
+	## many were actually there.
+	var current: int = int(destinations.get(stop_name, 0))
+	var taken: int = mini(count, current)
+	if taken <= 0:
+		return 0
+	var left: int = current - taken
+	if left > 0:
+		destinations[stop_name] = left
+	else:
+		destinations.erase(stop_name)
+	emit_signal("destinations_changed")
+	return taken
+
+
+func next_destination_name() -> String:
+	## The stop the HUD should point the driver at: whichever onboard
+	## destination is nearest, resolved by the caller passing positions in.
+	var names: Array = destinations.keys()
+	if names.is_empty():
+		return ""
+	return String(names[0])
 
 
 func fuel_ratio() -> float:

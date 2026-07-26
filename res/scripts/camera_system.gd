@@ -22,6 +22,9 @@ var _ray: RayCast3D = null
 var _current_pos: Vector3 = Vector3.ZERO
 var _current_look: Vector3 = Vector3.ZERO
 var _initialized: bool = false
+## Interior camera: driver head lean into corners, and engine/road shake.
+var _head_lean: float = 0.0
+var _shake_time: float = 0.0
 
 
 func _ready() -> void:
@@ -106,6 +109,8 @@ func _update_chase(delta: float) -> void:
 	_current_look = _current_look.lerp(look_at_point, lt)
 
 	_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	# Restore the default near plane; the interior mode tightens it to 0.02.
+	_camera.near = 0.08
 	_camera.global_position = _current_pos
 	_safe_look_at(_current_look)
 
@@ -122,18 +127,56 @@ func _update_interior(delta: float) -> void:
 	if anchor != null:
 		pos = anchor.global_transform.origin
 	else:
-		pos = target.to_global(Vector3(-0.62, 0.62, -4.05))
+		pos = target.to_global(Vector3(0.66, 0.30, 8.0))
 
 	var basis: Basis = target.global_transform.basis
-	# Look out through the windshield, i.e. along the bus forward (+Z).
-	var look_point: Vector3 = pos + basis.z * 12.0 + Vector3.UP * 0.2
 
-	var t: float = clampf(18.0 * delta, 0.0, 1.0)
+	# Subtle head motion so the cab feels inhabited rather than bolted down.
+	# Leaning INTO the corner is what a driver actually does.
+	var lateral: float = 0.0
+	var speed_ms: float = 0.0
+	if target is VehicleBody3D:
+		var body: VehicleBody3D = target as VehicleBody3D
+		speed_ms = body.linear_velocity.length()
+		# Sideways acceleration in the bus's own frame.
+		lateral = body.linear_velocity.dot(basis.x)
+	_head_lean = lerpf(_head_lean, clampf(lateral * 0.035, -0.09, 0.09),
+		clampf(delta * 3.0, 0.0, 1.0))
+
+	# Engine shake, strongest at low speed under load, plus road buzz.
+	_shake_time += delta * (7.0 + speed_ms * 0.7)
+	var idle_shake: float = 0.0016
+	var road_shake: float = clampf(speed_ms / 22.0, 0.0, 1.0) * 0.0042
+	var shake: float = idle_shake + road_shake
+	var bob: Vector3 = Vector3(
+		sin(_shake_time * 1.7) * shake,
+		sin(_shake_time * 2.3) * shake * 1.3,
+		0.0
+	)
+
+	pos += basis.x * _head_lean + basis * bob
+
+	# Look out through the windshield, i.e. along the bus forward (+Z),
+	# aimed slightly down at the road rather than at the sky.
+	var look_point: Vector3 = pos + basis.z * 14.0 - Vector3.UP * 0.9
+	# Glance into the turn a little; makes cornering far more readable.
+	look_point += basis.x * (-_head_lean * 9.0)
+
+	# Snap on the first frame so the camera never flies in from the old mode.
+	if not _initialized:
+		_current_pos = pos
+		_current_look = look_point
+		_initialized = true
+
+	var t: float = clampf(24.0 * delta, 0.0, 1.0)
 	_current_pos = _current_pos.lerp(pos, t)
 	_current_look = _current_look.lerp(look_point, t)
 
 	_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
-	_camera.fov = 74.0
+	# Slightly wider than the chase view: a cab feels cramped otherwise.
+	_camera.fov = lerpf(_camera.fov, 78.0, t)
+	# Near plane must be tight or the steering wheel and dash clip away.
+	_camera.near = 0.02
 	_camera.global_position = _current_pos
 	_safe_look_at(_current_look)
 

@@ -228,6 +228,131 @@ def check_ui_contract():
         err("emulate_mouse_from_touch must stay false, see HANDOVER.md 3.6")
 
 
+# --- 3c. driving / gameplay regressions -------------------------------------
+def check_gameplay_contract():
+    """Bugs the player hit in the field. Each one is pinned so a later tweak
+    cannot quietly bring it back.
+
+    1) The bus topped out at 1 km/h. The door interlock applied a brake while
+       "speed_kmh > 1.0", so the bus could never accelerate past the very
+       threshold that triggered it. The interlock must cut the throttle, not
+       fight the engine with a brake.
+    2) 3400 N over 2 driven wheels on a 10 t body is 0.68 m/s^2 -- over 30 s
+       to reach 80 km/h. All four wheels now drive and the force is real.
+    3) Traffic never caught fire because a CharacterBody3D only sees contacts
+       from its OWN move_and_slide(); a car the bus rammed was often
+       stationary, so nothing was ever reported. The bus must report the hit.
+    """
+    bus_path = os.path.join(RES, "scripts", "bus_controller.gd")
+    if not os.path.isfile(bus_path):
+        err("missing res/scripts/bus_controller.gd")
+        return
+    bus = open(bus_path, encoding="utf-8").read()
+
+    # 1) the 1 km/h trap. Strip comments first: the fix documents the old
+    # broken line in a comment, and matching that would be a false alarm.
+    bus_code = "\n".join(
+        line.split("#")[0] for line in bus.splitlines()
+    )
+    if re.search(r"doors_open and speed_kmh > 1\.0", bus_code):
+        err(
+            "bus_controller.gd: the door interlock brakes above 1 km/h, which"
+            " caps the bus AT 1 km/h. Cut engine_force instead."
+        )
+    else:
+        ok("door interlock does not brake-lock the bus at 1 km/h")
+
+    m = re.search(r"const ENGINE_POWER: float = ([0-9.]+)", bus)
+    if m:
+        power = float(m.group(1))
+        # 4 driven wheels against the 10 t mass set in _ready().
+        accel = power * 4.0 / 10000.0
+        # Lower bound: below ~2 m/s^2 the bus feels like it is towing a
+        # building (the original 3400 N gave 1.36 and was the complaint).
+        # Upper bound: above ~3.5 m/s^2 a 10 t coach accelerates like a hot
+        # hatch, which breaks the sense of weight.
+        if accel < 2.0:
+            err(
+                "ENGINE_POWER=" + str(power) + " gives only "
+                + str(round(accel, 2)) + " m/s2; the bus will feel sluggish"
+            )
+        elif accel > 3.5:
+            err(
+                "ENGINE_POWER=" + str(power) + " gives "
+                + str(round(accel, 2)) + " m/s2; far too brisk for a 10 t bus"
+            )
+        else:
+            ok("engine gives " + str(round(accel, 2)) + " m/s2 (bus-like)")
+    else:
+        err("bus_controller.gd: ENGINE_POWER not found")
+
+    if re.search(r"wheel\.use_as_traction = not is_front", bus):
+        err("bus_controller.gd: only the rear axle drives; use all four wheels")
+    else:
+        ok("all four wheels provide traction")
+
+    # 3) crash reporting
+    if "_report_crashes" in bus and "take_external_hit" in bus:
+        ok("bus reports collisions to traffic (fire/explosion can trigger)")
+    else:
+        err(
+            "bus_controller.gd must call take_external_hit on traffic;"
+            " otherwise ramming a stopped car does nothing"
+        )
+
+    traffic_path = os.path.join(RES, "scripts", "traffic_ai.gd")
+    if os.path.isfile(traffic_path):
+        traffic = open(traffic_path, encoding="utf-8").read()
+        if "func take_external_hit" in traffic:
+            ok("traffic_ai accepts externally reported impacts")
+        else:
+            err("traffic_ai.gd is missing take_external_hit()")
+        if "_gap_ratio" in traffic:
+            ok("traffic uses proportional following distance")
+        else:
+            warn("traffic_ai.gd has no gap-based speed control")
+
+    # 4) the map the player asked for
+    map_path = os.path.join(RES, "scripts", "mini_map.gd")
+    if os.path.isfile(map_path):
+        ok("mini_map.gd present")
+    else:
+        err("res/scripts/mini_map.gd missing")
+
+    state_path = os.path.join(RES, "scripts", "game_state.gd")
+    state = open(state_path, encoding="utf-8").read()
+    for needed in ("register_stop", "pick_destination", "add_destination",
+                   "take_destination", "destinations_changed"):
+        if needed in state:
+            ok("game_state exposes " + needed)
+        else:
+            err("game_state.gd missing " + needed + " (map cannot work)")
+
+    # 5) stop names must be unique or the map points at the wrong place
+    city_path = os.path.join(RES, "scripts", "city_builder.gd")
+    city = open(city_path, encoding="utf-8").read()
+    if re.search(r"STOP_NAMES\[_stop_index % STOP_NAMES\.size\(\)\]", city):
+        err(
+            "city_builder.gd reuses stop names (24 stops, 8 names); the HUD"
+            " map looks stops up BY NAME and would target the wrong one"
+        )
+    else:
+        ok("stop names are made unique")
+
+    # 6) the windshield must be see-through from the interior camera
+    if "_windshield_mat" in bus:
+        ok("windshield has its own clear material")
+    else:
+        err("bus_controller.gd: windshield still shares the tinted glass mat")
+    if re.search(r'"WindshieldFrame"', bus_code):
+        err(
+            "bus_controller.gd: the solid WindshieldFrame box blocks the"
+            " interior view; use separate rails/posts"
+        )
+    else:
+        ok("windshield frame is hollow (no solid pane in front of the glass)")
+
+
 # --- 4. resource paths ------------------------------------------------------
 def check_resources():
     referenced = set()
@@ -393,6 +518,7 @@ def main():
     check_style()
     check_format_rule()
     check_ui_contract()
+    check_gameplay_contract()
     check_resources()
     check_asset_contract()
     check_workflow()

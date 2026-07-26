@@ -52,6 +52,15 @@ func _ready() -> void:
 
 	if GameState != null:
 		GameState.night_factor_changed.connect(_on_night_changed)
+		# Register on the global map. Deferred so city_builder has finished
+		# positioning us: global_position is meaningless before that.
+		_register_on_map.call_deferred()
+
+
+func _register_on_map() -> void:
+	if GameState == null:
+		return
+	GameState.register_stop(stop_name, global_position, self)
 
 
 func _needs_shape() -> bool:
@@ -108,13 +117,10 @@ func _physics_process(delta: float) -> void:
 
 
 func _begin_service() -> void:
-	# Decide how many onboard passengers want THIS stop.
-	var onboard: int = GameState.passengers_onboard
-	_to_alight = 0
-	if onboard > 0:
-		var half: int = int(ceil(float(onboard) * 0.5))
-		_to_alight = randi_range(1, maxi(1, half))
-		_to_alight = mini(_to_alight, onboard)
+	# How many onboard passengers actually bought a ticket to THIS stop.
+	# This used to be a random slice of everyone onboard, which is why the
+	# game could never tell the player where to go: nobody had a destination.
+	_to_alight = GameState.passengers_for(stop_name)
 	_phase = 1
 	_timer = 0.0
 	GameState.notify("Arrived at " + stop_name)
@@ -124,6 +130,8 @@ func _do_alight_step() -> void:
 	if _to_alight <= 0:
 		_phase = 2
 		return
+	# Clear the ticket first so the map marker updates as they step off.
+	GameState.take_destination(stop_name, 1)
 	var earned: int = GameState.alight_passengers(1)
 	_to_alight -= 1
 	emit_signal("passengers_alighted", 1, earned)
@@ -145,6 +153,13 @@ func _do_board_step() -> void:
 		return
 	waiting_passengers -= 1
 	_refresh_queue_visuals()
+
+	# Give the new passenger a real destination so the map can show it.
+	var destination: String = GameState.pick_destination(stop_name)
+	if destination != "":
+		GameState.add_destination(destination, boarded)
+		GameState.notify("Passenger boarding for " + destination)
+
 	emit_signal("passengers_boarded", boarded)
 	if waiting_passengers <= 0:
 		_finish_service()
@@ -166,8 +181,19 @@ func _on_body_entered(body: Node) -> void:
 		_phase = 0
 		_timer = 0.0
 		if GameState != null:
-			var count: String = str(waiting_passengers)
-			GameState.notify(stop_name + ": " + count + " waiting - stop and open doors")
+			_announce_arrival()
+
+
+func _announce_arrival() -> void:
+	## Tell the driver both halves of the job at this stop: who wants OFF
+	## here (which is what the map marker was pointing at) and who wants ON.
+	var dropping: int = GameState.passengers_for(stop_name)
+	if dropping > 0:
+		GameState.notify(stop_name + ": DROP OFF " + str(dropping)
+			+ " here - stop and open doors")
+		return
+	var count: String = str(waiting_passengers)
+	GameState.notify(stop_name + ": " + count + " waiting - stop and open doors")
 
 
 func _on_body_exited(body: Node) -> void:

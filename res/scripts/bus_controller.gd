@@ -26,13 +26,31 @@ const MAX_SPEED_KMH: float = 80.0
 const MAX_STEER_ANGLE: float = 0.55
 const STEER_SPEED: float = 3.4
 const STEER_RETURN_SPEED: float = 4.2
-const ENGINE_POWER: float = 3400.0
-const BRAKE_POWER: float = 90.0
-const HANDBRAKE_POWER: float = 220.0
-const IDLE_DRAG: float = 6.0
+## Engine force PER DRIVEN WHEEL, in newtons.
+##
+## The bus was painfully slow: 3400 N over only 2 driven wheels on a 10 t body
+## is 6800 / 10000 = 0.68 m/s^2, i.e. over 30 s to reach 80 km/h, and the low
+## friction slip meant even that was not reaching the road.
+##
+## Now all four wheels drive: 6000 N x 4 / 10000 kg = 2.4 m/s^2 of raw drive
+## force, so roughly 6 s to 50 km/h before drag and rolling resistance. A real
+## city bus takes 10-14 s, but that feels sluggish on a phone; this keeps the
+## bus unmistakably heavy while still being responsive.
+const ENGINE_POWER: float = 6000.0
+const BRAKE_POWER: float = 220.0
+const HANDBRAKE_POWER: float = 420.0
+## Engine braking when the driver lifts off. Small: a heavy bus coasts.
+const IDLE_DRAG: float = 4.0
+## Air + rolling resistance, scaled by speed^2, so top speed settles instead
+## of the bus creeping past MAX_SPEED_KMH.
+const DRAG_COEFFICIENT: float = 0.55
 
-const FUEL_IDLE_RATE: float = 0.055
-const FUEL_DRIVE_RATE: float = 0.85
+## Litres per second. The old rates (0.055 / 0.85) emptied the 300 L tank in
+## about 5.5 minutes of hard driving, which the player felt was too slow to
+## matter. Roughly tripled: ~4 minutes of city driving, ~9 minutes idling, so
+## refuelling is a real part of the route without becoming the whole game.
+const FUEL_IDLE_RATE: float = 0.55
+const FUEL_DRIVE_RATE: float = 1.35
 
 # Body dimensions (metres)
 const BODY_HALF_WIDTH: float = 1.27
@@ -54,6 +72,7 @@ var headlights_on: bool = false
 var engine_running: bool = true
 
 var _steer_current: float = 0.0
+var _door_warning_sent: bool = false
 var _door_slide: float = 0.0
 var _wiper_time: float = 0.0
 var _wipers_on: bool = false
@@ -69,6 +88,10 @@ var _door_node: Node3D = null
 var _wiper_nodes: Array[Node3D] = []
 var _sign_material: StandardMaterial3D = null
 var _interior_light: OmniLight3D = null
+# --- cockpit parts animated from _update_cockpit() ---
+var _steering_wheel_node: Node3D = null
+var _speedo_needle: MeshInstance3D = null
+var _tacho_needle: MeshInstance3D = null
 
 @onready var _horn_player: AudioStreamPlayer3D = AudioStreamPlayer3D.new()
 var _engine_player: AudioStreamPlayer3D = null
@@ -107,7 +130,46 @@ func _physics_process(delta: float) -> void:
 	_update_fuel(delta)
 	_update_door(delta)
 	_update_wipers(delta)
+	_update_cockpit(delta)
 	_update_engine_audio(delta)
+	_report_crashes()
+
+
+func _report_crashes() -> void:
+	## The bus is the heavy body with the momentum, so IT tells the traffic it
+	## has been hit. A CharacterBody3D (traffic_ai.gd) only sees contacts made
+	## by its own move_and_slide(), which meant driving into a stopped car
+	## produced no damage, no fire and no explosion at all.
+	##
+	## contact_monitor / max_contacts_reported are already enabled in _ready().
+	var bodies: Array[Node3D] = get_colliding_bodies()
+	var i: int = 0
+	while i < bodies.size():
+		var body: Node3D = bodies[i]
+		i += 1
+		if body == null or not is_instance_valid(body):
+			continue
+		if not body.is_in_group("traffic"):
+			continue
+		if not body.has_method("take_external_hit"):
+			continue
+
+		var other_vel: Vector3 = Vector3.ZERO
+		if body.has_method("get_velocity"):
+			var v: Variant = body.call("get_velocity")
+			if v is Vector3:
+				other_vel = v as Vector3
+
+		# Closing speed along the line between the two vehicles.
+		var to_other: Vector3 = body.global_position - global_position
+		to_other.y = 0.0
+		if to_other.length() < 0.01:
+			continue
+		var normal: Vector3 = to_other.normalized()
+		var closing: float = (linear_velocity - other_vel).dot(normal)
+		if closing <= 0.5:
+			continue
+		body.call("take_external_hit", closing, -normal)
 
 
 func _update_steering(delta: float) -> void:
@@ -150,13 +212,19 @@ func _update_drive(_delta: float) -> void:
 	var forward: Vector3 = global_transform.basis.z
 	var forward_speed: float = linear_velocity.dot(forward) * 3.6
 
+	# Taper the throttle as the limiter approaches instead of chopping it to
+	# zero, which used to make the bus surge and stall around the top speed.
 	if forward_speed >= MAX_SPEED_KMH:
 		throttle = 0.0
+	elif forward_speed > MAX_SPEED_KMH - 8.0:
+		throttle *= clampf((MAX_SPEED_KMH - forward_speed) / 8.0, 0.0, 1.0)
 
 	# Reverse when braking while nearly stopped.
 	var drive: float = throttle
+	var reversing: bool = false
 	if braking > 0.01 and forward_speed < 1.5:
-		drive = -braking * 0.45
+		drive = -braking * 0.55
+		reversing = true
 
 	engine_force = drive * ENGINE_POWER
 
@@ -167,11 +235,45 @@ func _update_drive(_delta: float) -> void:
 		brake_amount = IDLE_DRAG
 	if handbrake:
 		brake_amount = HANDBRAKE_POWER
-	if doors_open and speed_kmh > 1.0:
-		brake_amount = maxf(brake_amount, 25.0)
+
+	# DOOR INTERLOCK.
+	#
+	# This used to read "if doors_open and speed_kmh > 1.0: brake = 25".
+	# 25 units of brake against 6800 N of drive meant the bus could never
+	# climb past that 1.0 km/h trigger: the speedometer sat on 1, or on 0,
+	# exactly as reported. Worse, nothing told the player why, because the
+	# doors default to open and the interlock is invisible.
+	#
+	# A real bus simply will not pull away with the doors open, so now the
+	# throttle is cut outright (clear cause and effect) and the brake is only
+	# firm enough to hold the bus still, not to fight the engine forever.
+	if doors_open and not reversing:
+		engine_force = 0.0
+		if speed_kmh > 0.5:
+			brake_amount = maxf(brake_amount, BRAKE_POWER * 0.5)
+		_warn_doors_open()
+
 	brake = brake_amount
 
+	# Quadratic drag: the dominant resistance at speed, and what actually
+	# settles the top speed rather than the hard cut-off above.
+	var speed_ms: float = linear_velocity.length()
+	if speed_ms > 0.1:
+		var drag: Vector3 = -linear_velocity.normalized() * DRAG_COEFFICIENT * speed_ms * speed_ms
+		apply_central_force(drag)
+
 	_update_brake_lights(braking)
+
+
+func _warn_doors_open() -> void:
+	## Tell the player once per closed->open cycle why the bus will not move.
+	if _door_warning_sent:
+		return
+	if throttle_input < 0.05:
+		return
+	_door_warning_sent = true
+	if GameState != null:
+		GameState.notify("Close the doors before driving off")
 
 
 func _update_brake_lights(braking: float) -> void:
@@ -236,6 +338,9 @@ func set_doors_open(value: bool) -> void:
 	if doors_open == value:
 		return
 	doors_open = value
+	# Re-arm the "close the doors" hint for the next time they are opened.
+	if not doors_open:
+		_door_warning_sent = false
 	emit_signal("door_state_changed", doors_open)
 
 
@@ -308,12 +413,36 @@ func _mat(color: Color, metallic: float, roughness: float) -> StandardMaterial3D
 
 
 func _glass_mat() -> StandardMaterial3D:
+	## Side / rear glazing: tinted, seen mostly from outside.
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.07, 0.10, 0.14, 0.62)
+	mat.albedo_color = Color(0.10, 0.14, 0.19, 0.42)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.metallic = 0.9
+	mat.metallic = 0.85
 	mat.roughness = 0.06
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
+func _windshield_mat() -> StandardMaterial3D:
+	## The windshield needs its own, much clearer material.
+	##
+	## From the interior camera the old one was effectively opaque, for three
+	## reasons stacked on top of each other:
+	##   1. alpha 0.62 is a heavy tint to look THROUGH (it is fine to look AT)
+	##   2. metallic 0.9 makes the surface mirror the dark cabin back at you
+	##   3. the opaque WindshieldFrame box sat 60 mm in front of the glass and
+	##      filled the view on its own
+	## Now: barely tinted, non-metallic, and the frame is hollowed out below.
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.albedo_color = Color(0.62, 0.72, 0.80, 0.10)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.metallic = 0.0
+	mat.roughness = 0.02
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Do not let the windshield catch shadows: an acne-speckled pane reads as
+	# dirt smeared across the driver's view.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	return mat
 
 
@@ -392,18 +521,32 @@ func _build_wheels() -> void:
 
 		var is_front: bool = i < 2
 		wheel.use_as_steering = is_front
-		wheel.use_as_traction = not is_front
+		# All four wheels drive. Only the rear axle used to, which halved the
+		# available force and let the rears spin up while the fronts dragged,
+		# so the bus crawled away from a standstill.
+		wheel.use_as_traction = true
 
 		wheel.wheel_radius = 0.52
 		wheel.wheel_rest_length = 0.3
-		wheel.wheel_friction_slip = 4.0
-		wheel.suspension_stiffness = 25.0
-		wheel.suspension_travel = 0.32
-		wheel.suspension_max_force = 90000.0
-		wheel.damping_compression = 3.0
-		wheel.damping_relaxation = 4.0
+		# Friction slip was 4.0 / 3.6, well under Godot's 10.5 default. On a
+		# 10 t body that is not enough grip to put the engine force on the
+		# road: the tyres slipped instead of accelerating the bus.
+		wheel.wheel_friction_slip = 9.0
+		# Docs: stiffness under 50 is an off-road setting. A loaded coach on
+		# tarmac sits much firmer, and the soft springs were letting the body
+		# wallow and sap drive.
+		wheel.suspension_stiffness = 70.0
+		wheel.suspension_travel = 0.28
+		# Docs: should exceed mass/4 (2500 N), ideally 3-4x. 90000 was ~36x,
+		# which made the springs effectively rigid.
+		wheel.suspension_max_force = 12000.0
+		# Docs: compression ~0.3, relaxation slightly higher. 3.0 / 4.0 was an
+		# order of magnitude too much and behaved like a locked strut.
+		wheel.damping_compression = 0.4
+		wheel.damping_relaxation = 0.6
 		if not is_front:
-			wheel.wheel_friction_slip = 3.6
+			# Slightly more grip at the driven rear axle.
+			wheel.wheel_friction_slip = 10.5
 
 		add_child(wheel)
 		_wheels.append(wheel)
@@ -549,10 +692,33 @@ func _build_glazing(root: Node3D, glass_mat: StandardMaterial3D,
 func _build_front(root: Node3D, body_mat: StandardMaterial3D, trim_mat: StandardMaterial3D,
 		chrome_mat: StandardMaterial3D, glass_mat: StandardMaterial3D) -> void:
 	# Large raked windshield. Negative X rotation leans the top backwards (-Z).
-	_add_box(root, "WindshieldFrame", Vector3(2.44, 1.55, 0.10),
-		Vector3(0.0, 0.72, FRONT_Z - 0.10), trim_mat, Vector3(-12, 0, 0))
-	_add_box(root, "Windshield", Vector3(2.30, 1.42, 0.06),
-		Vector3(0.0, 0.72, FRONT_Z - 0.04), glass_mat, Vector3(-12, 0, 0))
+	#
+	# The frame used to be one solid box covering the whole aperture, sitting
+	# 60 mm behind the glass -- from the driver's seat you were staring at
+	# painted metal, not through a window. It is now four thin edge pieces
+	# with a genuine hole in the middle.
+	var glass_w: float = 2.30
+	var glass_h: float = 1.42
+	var frame_t: float = 0.09
+	var rake: Vector3 = Vector3(-12, 0, 0)
+	var frame_z: float = FRONT_Z - 0.10
+
+	# top and bottom rails
+	_add_box(root, "WindshieldRailTop", Vector3(glass_w + 0.14, frame_t, 0.10),
+		Vector3(0.0, 0.72 + glass_h * 0.5, frame_z + 0.015), trim_mat, rake)
+	_add_box(root, "WindshieldRailBottom", Vector3(glass_w + 0.14, frame_t, 0.10),
+		Vector3(0.0, 0.72 - glass_h * 0.5, frame_z - 0.015), trim_mat, rake)
+	# left and right posts (A-pillars)
+	_add_box(root, "WindshieldPostL", Vector3(frame_t, glass_h + 0.14, 0.10),
+		Vector3(glass_w * 0.5, 0.72, frame_z), trim_mat, rake)
+	_add_box(root, "WindshieldPostR", Vector3(frame_t, glass_h + 0.14, 0.10),
+		Vector3(-glass_w * 0.5, 0.72, frame_z), trim_mat, rake)
+	# slim central divider, as on a real two-piece coach screen
+	_add_box(root, "WindshieldDivider", Vector3(0.05, glass_h, 0.07),
+		Vector3(0.0, 0.72, frame_z + 0.005), trim_mat, rake)
+
+	_add_box(root, "Windshield", Vector3(glass_w, glass_h, 0.04),
+		Vector3(0.0, 0.72, FRONT_Z - 0.04), _windshield_mat(), rake)
 
 	# destination sign above the windshield
 	var sign_mat: StandardMaterial3D = _emissive_mat(
@@ -826,26 +992,7 @@ func _build_interior(root: Node3D) -> void:
 			Vector3(-0.55, 0.02, pole_zs[p]), pole_mat, Vector3.ZERO, 8)
 		p += 1
 
-	# --- driver area: LEFT side (+X) for right-hand traffic ---
-	_add_box(root, "Dashboard", Vector3(2.10, 0.34, 0.72),
-		Vector3(0.0, -0.26, FRONT_Z - 0.85), dash_mat, Vector3.ZERO)
-	_add_box(root, "DriverSeatBase", Vector3(0.62, 0.15, 0.58),
-		Vector3(0.62, -0.56, FRONT_Z - 1.85), seat_mat, Vector3.ZERO)
-	_add_box(root, "DriverSeatBack", Vector3(0.62, 0.72, 0.14),
-		Vector3(0.62, -0.16, FRONT_Z - 2.12), seat_mat, Vector3.ZERO)
-
-	var wheel_node: MeshInstance3D = MeshInstance3D.new()
-	wheel_node.name = "SteeringWheel"
-	var torus: TorusMesh = TorusMesh.new()
-	torus.inner_radius = 0.19
-	torus.outer_radius = 0.25
-	torus.rings = 16
-	torus.ring_segments = 8
-	wheel_node.mesh = torus
-	wheel_node.position = Vector3(0.62, 0.02, FRONT_Z - 1.28)
-	wheel_node.rotation_degrees = Vector3(70.0, 0.0, 0.0)
-	wheel_node.set_surface_override_material(0, _mat(Color(0.06, 0.06, 0.07), 0.1, 0.6))
-	root.add_child(wheel_node)
+	_build_cockpit(root, seat_mat, dash_mat, pole_mat)
 
 	var cabin_light: OmniLight3D = OmniLight3D.new()
 	cabin_light.name = "InteriorLight"
@@ -856,6 +1003,235 @@ func _build_interior(root: Node3D) -> void:
 	cabin_light.shadow_enabled = false
 	add_child(cabin_light)
 	_interior_light = cabin_light
+
+
+func _build_cockpit(root: Node3D, seat_mat: StandardMaterial3D,
+		dash_mat: StandardMaterial3D, pole_mat: StandardMaterial3D) -> void:
+	## Detailed driver's cockpit, built to be looked at from the INTERIOR
+	## camera. Everything here sits in front of / around the driver's eye
+	## point (see _build_camera_mounts), so proportions are chosen for how
+	## they read from the seat, not from outside the bus.
+	##
+	## Driver is on the LEFT of the bus, which is +X (the bus faces +Z).
+	var dx: float = 0.66
+
+	var plastic: StandardMaterial3D = _mat(Color(0.07, 0.075, 0.09), 0.15, 0.72)
+	var soft: StandardMaterial3D = _mat(Color(0.11, 0.115, 0.13), 0.05, 0.88)
+	var chrome: StandardMaterial3D = _mat(Color(0.80, 0.83, 0.88), 1.0, 0.14)
+	var rubber: StandardMaterial3D = _mat(Color(0.05, 0.05, 0.055), 0.0, 0.94)
+	var screen_mat: StandardMaterial3D = _emissive_mat(
+		Color(0.02, 0.04, 0.05), Color(0.16, 0.78, 0.62), 1.5)
+
+	# ---- dashboard shell: a wrap-around binnacle, not a flat slab ----
+	var dash_z: float = FRONT_Z - 0.92
+	_add_box(root, "DashMain", Vector3(2.24, 0.40, 0.66),
+		Vector3(0.0, -0.30, dash_z), dash_mat, Vector3.ZERO)
+	# top cowl, angled so it catches the light like a real moulding
+	_add_box(root, "DashCowl", Vector3(2.24, 0.10, 0.44),
+		Vector3(0.0, -0.09, dash_z + 0.10), plastic, Vector3(-24, 0, 0))
+	# lower knee bolster, tucked under and back
+	_add_box(root, "DashLower", Vector3(2.10, 0.34, 0.34),
+		Vector3(0.0, -0.62, dash_z - 0.12), plastic, Vector3(12, 0, 0))
+	# kick panel down to the floor
+	_add_box(root, "DashKick", Vector3(2.10, 0.30, 0.10),
+		Vector3(0.0, -0.86, dash_z - 0.26), soft, Vector3.ZERO)
+
+	# ---- instrument binnacle right in front of the driver ----
+	var pod_z: float = dash_z + 0.06
+	_add_box(root, "InstrumentPod", Vector3(0.76, 0.30, 0.30),
+		Vector3(dx, -0.13, pod_z), plastic, Vector3(-30, 0, 0))
+	# hood over the dials to stop sun glare
+	_add_box(root, "InstrumentHood", Vector3(0.82, 0.05, 0.26),
+		Vector3(dx, 0.03, pod_z + 0.03), plastic, Vector3(-42, 0, 0))
+
+	# The two main dials. Kept as thin cylinders facing the driver.
+	var dial_face: StandardMaterial3D = _emissive_mat(
+		Color(0.03, 0.035, 0.045), Color(0.35, 0.62, 0.95), 0.9)
+	_add_cylinder(root, "DialSpeedo", 0.115, 0.02,
+		Vector3(dx - 0.16, -0.11, pod_z + 0.15), dial_face, Vector3(60, 0, 0), 20)
+	_add_cylinder(root, "DialTacho", 0.095, 0.02,
+		Vector3(dx + 0.15, -0.12, pod_z + 0.14), dial_face, Vector3(60, 0, 0), 20)
+	_add_cylinder(root, "DialRimSpeedo", 0.125, 0.016,
+		Vector3(dx - 0.16, -0.112, pod_z + 0.146), chrome, Vector3(60, 0, 0), 20)
+	_add_cylinder(root, "DialRimTacho", 0.105, 0.016,
+		Vector3(dx + 0.15, -0.122, pod_z + 0.136), chrome, Vector3(60, 0, 0), 20)
+
+	# Live needles. Stored so _update_cockpit() can animate them.
+	_speedo_needle = _add_box(root, "NeedleSpeedo", Vector3(0.012, 0.10, 0.006),
+		Vector3(dx - 0.16, -0.11, pod_z + 0.163), _emissive_mat(
+			Color(0.9, 0.15, 0.12), Color(1.0, 0.22, 0.16), 3.0), Vector3(60, 0, 0))
+	_tacho_needle = _add_box(root, "NeedleTacho", Vector3(0.012, 0.084, 0.006),
+		Vector3(dx + 0.15, -0.12, pod_z + 0.153), _emissive_mat(
+			Color(0.95, 0.72, 0.15), Color(1.0, 0.78, 0.2), 3.0), Vector3(60, 0, 0))
+	# Pivot the needles about the dial centre rather than their own middle.
+	_pivot_needle(_speedo_needle, 0.05)
+	_pivot_needle(_tacho_needle, 0.042)
+
+	# small multi-function display beside the dials
+	_add_box(root, "DashScreen", Vector3(0.26, 0.13, 0.012),
+		Vector3(dx + 0.02, -0.30, dash_z + 0.34), screen_mat, Vector3(-18, 0, 0))
+
+	# ---- steering column and wheel ----
+	_add_cylinder(root, "SteeringColumn", 0.055, 0.46,
+		Vector3(dx, -0.30, dash_z + 0.30), plastic, Vector3(66, 0, 0), 12)
+
+	# The wheel is a child of a pivot so it can actually rotate with steering.
+	var wheel_pivot: Node3D = Node3D.new()
+	wheel_pivot.name = "SteeringWheelPivot"
+	wheel_pivot.position = Vector3(dx, -0.10, dash_z + 0.52)
+	# 66 deg of rake: near-horizontal like a bus, not vertical like a car.
+	wheel_pivot.rotation_degrees = Vector3(66.0, 0.0, 0.0)
+	root.add_child(wheel_pivot)
+	_steering_wheel_node = wheel_pivot
+
+	var rim: MeshInstance3D = MeshInstance3D.new()
+	rim.name = "WheelRim"
+	var torus: TorusMesh = TorusMesh.new()
+	torus.inner_radius = 0.215
+	torus.outer_radius = 0.255
+	torus.rings = 28
+	torus.ring_segments = 12
+	rim.mesh = torus
+	# TorusMesh lies in the XZ plane; the pivot already applies the rake.
+	rim.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	rim.set_surface_override_material(0, rubber)
+	wheel_pivot.add_child(rim)
+
+	# three spokes, 120 deg apart
+	var spoke_angles: Array[float] = [90.0, 210.0, 330.0]
+	var sp: int = 0
+	while sp < spoke_angles.size():
+		var ang: float = deg_to_rad(spoke_angles[sp])
+		var spoke: MeshInstance3D = MeshInstance3D.new()
+		spoke.name = "WheelSpoke" + str(sp)
+		var sbox: BoxMesh = BoxMesh.new()
+		sbox.size = Vector3(0.185, 0.022, 0.05)
+		spoke.mesh = sbox
+		spoke.position = Vector3(cos(ang) * 0.105, 0.0, sin(ang) * 0.105)
+		spoke.rotation_degrees = Vector3(0.0, -spoke_angles[sp], 0.0)
+		spoke.set_surface_override_material(0, plastic)
+		wheel_pivot.add_child(spoke)
+		sp += 1
+
+	# centre boss with a horn pad
+	var boss: MeshInstance3D = MeshInstance3D.new()
+	boss.name = "WheelBoss"
+	var bcyl: CylinderMesh = CylinderMesh.new()
+	bcyl.top_radius = 0.072
+	bcyl.bottom_radius = 0.072
+	bcyl.height = 0.045
+	bcyl.radial_segments = 16
+	boss.mesh = bcyl
+	boss.set_surface_override_material(0, plastic)
+	wheel_pivot.add_child(boss)
+
+	# ---- stalks on the column ----
+	_add_box(root, "StalkLeft", Vector3(0.16, 0.018, 0.018),
+		Vector3(dx - 0.17, -0.20, dash_z + 0.40), plastic, Vector3(0, 0, -8))
+	_add_box(root, "StalkRight", Vector3(0.16, 0.018, 0.018),
+		Vector3(dx + 0.17, -0.20, dash_z + 0.40), plastic, Vector3(0, 0, 8))
+
+	# ---- pedals ----
+	_add_box(root, "PedalThrottle", Vector3(0.09, 0.020, 0.20),
+		Vector3(dx - 0.10, -0.86, dash_z + 0.16), rubber, Vector3(-16, 0, 0))
+	_add_box(root, "PedalBrake", Vector3(0.11, 0.020, 0.17),
+		Vector3(dx + 0.12, -0.86, dash_z + 0.14), rubber, Vector3(-16, 0, 0))
+
+	# ---- gear selector / handbrake console beside the seat ----
+	_add_box(root, "Console", Vector3(0.28, 0.16, 0.52),
+		Vector3(dx - 0.44, -0.64, dash_z - 0.62), plastic, Vector3.ZERO)
+	_add_cylinder(root, "GearStick", 0.020, 0.24,
+		Vector3(dx - 0.44, -0.46, dash_z - 0.52), chrome, Vector3(-10, 0, 0), 10)
+	_add_cylinder(root, "GearKnob", 0.043, 0.05,
+		Vector3(dx - 0.44, -0.35, dash_z - 0.54), plastic, Vector3.ZERO, 14)
+	_add_box(root, "HandbrakeLever", Vector3(0.035, 0.035, 0.26),
+		Vector3(dx - 0.44, -0.50, dash_z - 0.78), chrome, Vector3(28, 0, 0))
+
+	# ---- driver's seat, properly shaped ----
+	var seat_z: float = FRONT_Z - 2.00
+	_add_box(root, "DriverSeatBase", Vector3(0.60, 0.16, 0.58),
+		Vector3(dx, -0.62, seat_z), seat_mat, Vector3.ZERO)
+	_add_box(root, "DriverSeatBack", Vector3(0.60, 0.78, 0.15),
+		Vector3(dx, -0.18, seat_z - 0.28), seat_mat, Vector3(6, 0, 0))
+	_add_box(root, "DriverSeatHead", Vector3(0.30, 0.20, 0.13),
+		Vector3(dx, 0.28, seat_z - 0.30), seat_mat, Vector3.ZERO)
+	# side bolsters
+	_add_box(root, "DriverSeatBolsterL", Vector3(0.08, 0.20, 0.52),
+		Vector3(dx + 0.27, -0.54, seat_z), seat_mat, Vector3.ZERO)
+	_add_box(root, "DriverSeatBolsterR", Vector3(0.08, 0.20, 0.52),
+		Vector3(dx - 0.27, -0.54, seat_z), seat_mat, Vector3.ZERO)
+	# air-suspended pedestal
+	_add_cylinder(root, "SeatPedestal", 0.10, 0.30,
+		Vector3(dx, -0.84, seat_z - 0.05), plastic, Vector3.ZERO, 10)
+
+	# ---- cab furniture ----
+	# driver's side window pillar trim, gives the cabin a sense of enclosure
+	_add_box(root, "CabDivider", Vector3(0.06, 1.30, 0.06),
+		Vector3(-0.62, -0.20, FRONT_Z - 1.55), plastic, Vector3.ZERO)
+	# fare tray / ticket machine to the driver's right
+	_add_box(root, "FareTray", Vector3(0.30, 0.10, 0.28),
+		Vector3(dx - 0.62, -0.30, dash_z - 0.18), plastic, Vector3.ZERO)
+	# grab handle above the door
+	_add_cylinder(root, "CabGrabHandle", 0.022, 0.44,
+		Vector3(-0.70, 0.46, FRONT_Z - 1.30), pole_mat, Vector3(0, 0, 90), 8)
+
+	# interior mirror, angled back down the aisle
+	_add_box(root, "InteriorMirror", Vector3(0.34, 0.10, 0.02),
+		Vector3(0.10, 0.62, FRONT_Z - 1.10), chrome, Vector3(18, 0, 0))
+
+	# sun visor over the driver
+	_add_box(root, "SunVisor", Vector3(0.74, 0.02, 0.22),
+		Vector3(dx, 0.68, FRONT_Z - 0.72), soft, Vector3(-34, 0, 0))
+
+
+func _pivot_needle(needle: MeshInstance3D, offset: float) -> void:
+	## A BoxMesh rotates about its centre. Sliding the mesh up inside a plain
+	## Node3D pivot makes the needle sweep from the dial hub like a real one.
+	if needle == null:
+		return
+	var parent: Node = needle.get_parent()
+	if parent == null:
+		return
+	var pivot: Node3D = Node3D.new()
+	pivot.name = needle.name + "Pivot"
+	pivot.transform = needle.transform
+	parent.add_child(pivot)
+	parent.remove_child(needle)
+	pivot.add_child(needle)
+	needle.transform = Transform3D.IDENTITY
+	needle.position = Vector3(0.0, offset, 0.0)
+
+
+func _update_cockpit(delta: float) -> void:
+	## Animates the parts of the cab the driver can see moving.
+	if _steering_wheel_node != null and is_instance_valid(_steering_wheel_node):
+		# Wheel turns ~2.2 turns lock to lock; _steer_current is -1..1.
+		var wheel_angle: float = -_steer_current * 3.9
+		_steering_wheel_node.rotation.y = lerpf(
+			_steering_wheel_node.rotation.y, wheel_angle, clampf(delta * 12.0, 0.0, 1.0))
+
+	if _speedo_needle != null and is_instance_valid(_speedo_needle):
+		var ratio: float = clampf(speed_kmh / 120.0, 0.0, 1.0)
+		# Sweep 240 degrees, starting at the 7-o'clock mark.
+		var angle: float = deg_to_rad(-120.0 + ratio * 240.0)
+		var pivot: Node = _speedo_needle.get_parent()
+		if pivot != null and pivot is Node3D:
+			(pivot as Node3D).rotation.y = angle
+
+	if _tacho_needle != null and is_instance_valid(_tacho_needle):
+		var rpm_ratio: float = clampf(_engine_rpm_ratio(), 0.0, 1.0)
+		var tangle: float = deg_to_rad(-120.0 + rpm_ratio * 240.0)
+		var tpivot: Node = _tacho_needle.get_parent()
+		if tpivot != null and tpivot is Node3D:
+			(tpivot as Node3D).rotation.y = tangle
+
+
+func _engine_rpm_ratio() -> float:
+	## Rough rev model: idle plus road speed, nudged by throttle.
+	var base: float = 0.16
+	var from_speed: float = clampf(speed_kmh / MAX_SPEED_KMH, 0.0, 1.0) * 0.62
+	var from_throttle: float = clampf(throttle_input, 0.0, 1.0) * 0.22
+	return clampf(base + from_speed + from_throttle, 0.0, 1.0)
 
 
 func _build_lights_only() -> void:
@@ -894,9 +1270,15 @@ func _build_camera_mounts() -> void:
 	add_child(chase)
 
 	# Driver's eye point: left seat (+X), just behind the windshield.
+	#
+	# Y is eye height above the bus origin, not seat height: sat at 0.62 the
+	# camera was level with the dashboard top and the cowl filled the frame.
+	# Z sits the driver behind the wheel (which is at FRONT_Z - 0.40) so the
+	# rim and dials are visible in the lower part of the view, the way they
+	# are from a real driving seat.
 	var interior: Marker3D = Marker3D.new()
 	interior.name = "InteriorAnchor"
-	interior.position = Vector3(0.62, 0.62, FRONT_Z - 1.75)
+	interior.position = Vector3(0.66, 0.30, FRONT_Z - 1.62)
 	add_child(interior)
 
 	var look: Marker3D = Marker3D.new()

@@ -24,6 +24,7 @@ const WHEEL_RETURN_SPEED: float = 4.2
 ## HANDOVER.md 3.6), so a stock Button gets no InputEventMouseButton from a
 ## finger and would be completely dead on a phone.
 const TOUCH_BUTTON_SCRIPT: String = "res://scripts/touch_button.gd"
+const MINI_MAP_SCRIPT: String = "res://scripts/mini_map.gd"
 
 @export var bus_path: NodePath
 @export var camera_path: NodePath
@@ -60,6 +61,10 @@ var _light_button: Button = null
 
 var _notify_timer: float = 0.0
 var _settings_panel: Panel = null
+## Mini-map + the "where am I taking these people" banner.
+var _mini_map: Control = null
+var _objective_label: Label = null
+var _objective_panel: Panel = null
 var _fps_label: Label = null
 var _settings_rows: Dictionary = {}
 
@@ -79,6 +84,8 @@ func _ready() -> void:
 	_build_pedals()
 	_build_action_buttons()
 	_build_notifications()
+	_build_mini_map()
+	_build_objective_banner()
 	_build_fps_counter()
 	_build_settings_menu()
 
@@ -110,6 +117,7 @@ func _process(delta: float) -> void:
 	_update_wheel_return(delta)
 	_apply_inputs()
 	_update_readouts()
+	_update_objective()
 	_update_fps()
 
 	if _notify_timer > 0.0:
@@ -771,6 +779,132 @@ func _build_notifications() -> void:
 # ---------------------------------------------------------------------------
 # FPS counter + graphics settings menu
 # ---------------------------------------------------------------------------
+
+func _build_mini_map() -> void:
+	## Top-left navigation dial. The player asked to be able to see where the
+	## passengers they picked up actually need to go.
+	if not ResourceLoader.exists(MINI_MAP_SCRIPT):
+		return
+	var script: Resource = load(MINI_MAP_SCRIPT)
+	if not (script is Script):
+		return
+
+	var radius: float = 96.0
+	var map: Control = Control.new()
+	map.set_script(script)
+	map.name = "MiniMap"
+	map.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	map.offset_left = 22.0
+	map.offset_top = 86.0
+	map.offset_right = 22.0 + radius * 2.0
+	map.offset_bottom = 86.0 + radius * 2.0
+	map.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(map)
+	_mini_map = map
+
+	if map.has_method("setup"):
+		var bus_node: Node3D = null
+		if bus is Node3D:
+			bus_node = bus as Node3D
+		map.call("setup", bus_node, radius)
+
+	_feed_map_roads()
+
+
+func _feed_map_roads() -> void:
+	## Hand the city's road centre lines to the map so it draws real streets.
+	if _mini_map == null or not _mini_map.has_method("set_road_grid"):
+		return
+	var tree: SceneTree = get_tree()
+	if tree == null:
+		return
+	var root: Node = tree.current_scene
+	if root == null:
+		return
+	var city: Node = root.find_child("CityBuilder", true, false)
+	if city == null:
+		return
+	var xs: Variant = city.get("_road_positions_x")
+	var zs: Variant = city.get("_road_positions_z")
+	var extent: Variant = city.get("_city_extent")
+	if xs == null or zs == null:
+		return
+	var extent_value: float = 200.0
+	if extent != null:
+		extent_value = float(extent)
+	_mini_map.call("set_road_grid", xs, zs, extent_value)
+
+
+func _build_objective_banner() -> void:
+	## Text version of the map marker: names the next stop and how far it is.
+	var panel: Panel = Panel.new()
+	panel.name = "ObjectivePanel"
+	panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	panel.offset_left = 22.0
+	panel.offset_top = 290.0
+	panel.offset_right = 236.0
+	panel.offset_bottom = 336.0
+	panel.add_theme_stylebox_override("panel",
+		_make_panel_style(Color(0.05, 0.07, 0.10, 0.78), 10))
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(panel)
+	_objective_panel = panel
+
+	var label: Label = Label.new()
+	label.name = "ObjectiveLabel"
+	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 15)
+	label.add_theme_color_override("font_color", Color(0.20, 0.92, 0.78))
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.text = "Pick up passengers"
+	panel.add_child(label)
+	_objective_label = label
+
+
+func _update_objective() -> void:
+	if _objective_label == null or GameState == null:
+		return
+	if bus == null or not is_instance_valid(bus) or not (bus is Node3D):
+		return
+
+	if GameState.destinations.is_empty():
+		_objective_label.text = "Find a stop and pick up passengers"
+		if _objective_panel != null:
+			_objective_panel.modulate = Color(1, 1, 1, 0.75)
+		return
+
+	# Nearest destination wins: that is the one the driver should head for.
+	var bus_pos: Vector3 = (bus as Node3D).global_position
+	var best_name: String = ""
+	var best_dist: float = -1.0
+	var names: Array = GameState.destinations.keys()
+	var i: int = 0
+	while i < names.size():
+		var stop_name: String = String(names[i])
+		i += 1
+		var pos: Vector3 = GameState.stop_position(stop_name)
+		if pos == Vector3.ZERO:
+			continue
+		var d: float = Vector2(bus_pos.x, bus_pos.z).distance_to(
+			Vector2(pos.x, pos.z))
+		if best_dist < 0.0 or d < best_dist:
+			best_dist = d
+			best_name = stop_name
+
+	if best_name == "":
+		_objective_label.text = "Carrying passengers"
+		return
+
+	var count: int = GameState.passengers_for(best_name)
+	var metres: int = int(round(best_dist))
+	_objective_label.text = ("DROP OFF: " + best_name + "\n"
+		+ str(count) + " aboard  -  " + str(metres) + " m")
+	if _objective_panel != null:
+		_objective_panel.modulate = Color(1, 1, 1, 1.0)
+
 
 func _build_fps_counter() -> void:
 	_fps_label = Label.new()
