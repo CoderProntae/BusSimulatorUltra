@@ -48,7 +48,7 @@ godot --path res
 | 16 GDScript dosyası | Hepsi parse ediyor (gdparse ile doğrulandı) |
 | CI / APK build | ✅ Çalışıyor |
 | APK boyutu | ~58 MB |
-| `python3 tools/verify_project.py` | **142/142 geçiyor** |
+| `python3 tools/verify_project.py` | **145/145 geçiyor** |
 | Ana menü | ✅ |
 | Gerçek yükleme ekranı | ✅ (sahte değil, ölçülü ilerleme) |
 | Grafik ayarları | ✅ `user://settings.cfg` |
@@ -193,6 +193,48 @@ gösterebilirdi. Artık `_unique_stop_name()` benzersiz isim üretiyor
 cam kendi `_windshield_mat()` materyalini kullanıyor (alfa 0,10, metallic 0).
 ⚠️ Tek parça `WindshieldFrame` kutusunu geri koyma — doğrulama reddeder.
 
+### 3.17 Otobüs 0 km/h'de takılı kaldı (süspansiyon otobüsü taşıyamıyordu)
+
+**Bu bir asistan regresyonuydu** — 3.12'yi düzeltirken oluştu. İki hata:
+
+1. `suspension_max_force = 12000`. Godot dokümanının *"aracın kütlesinin
+   dörtte birinden büyük olmalı"* ifadesini `10000 kg / 4 = 2500 N` diye
+   okumuşum. Kastedilen **ağırlığın** dörtte biri:
+   `10000 × 9.8 = 98000 N` → tekerlek başına **24500 N**.
+   4 tekerlek × 12000 = 48000 N, yani otobüsün sadece **%49'u**.
+2. `suspension_stiffness = 70` N/mm → statik çökme
+   `24500 / 70000 = 35 cm`, ama `suspension_travel` sadece 28 cm.
+
+Buna çarpışma kutusu da eklenince (2.9 m boy, y=0.35 merkez → altı -1.10,
+lastik teması -1.14, yani **4 cm** boşluk; çökmeyle birlikte 5,4 cm yeraltı)
+gövde asfalta oturdu. **Yolu otobüsü taşıyınca tekerleklerde yük kalmadı,
+yük yoksa tutuş da yok** → `engine_force` hiçbir şey yapmadı, hız 0.
+
+**Düzeltme:** `max_force=85000` (tekerlek yükünün 3,5 katı),
+`stiffness=260` (28 cm yolun içinde 9,4 cm çökme),
+çarpışma kutusu 2.5 m / y=0.55 (çökme sonrası 34,6 cm boşluk).
+Gövde mesh'ine dokunulmadı, sadece fizik proxy'si.
+
+⚠️ **DERS: statik kontrol bunu yakalayamadı.** Bu yüzden iki katman eklendi:
+- `verify_project.py` → `check_suspension_physics()`: taşıma kapasitesi,
+  çökme/yol oranı ve çökme sonrası yerden yükseklik **hesaplanır**.
+  Üç eski bozuk değerin üçünü de reddettiği doğrulandı.
+- **`tools/physics_smoke.gd`** → gerçek motorla headless test: otobüsü
+  zemine bırakır, gaza basar, 5 km/h'yi geçmezse / hareket etmezse /
+  4 tekerlek yüklü değilse / kapı açılınca yavaşlamazsa **build'i düşürür**.
+
+```bash
+bash RUN_PHYSICS_TEST.sh     # Godot'u indirir ve testi calistirir
+```
+
+⚠️ Bu testin CI adımı **`WORKFLOW_CONTENT.txt` içinde bekliyor**, çünkü bu
+uygulama bağlantısının `workflows` izni yok (`.github/workflows/` dosyasını
+push edemiyor). Etkinleştirmek için:
+```bash
+cp WORKFLOW_CONTENT.txt .github/workflows/build-apk.yml
+# dosyanin basindaki yorum blogunu sil, sonra commit + push
+```
+
 ### 3.8 CI süt kamyonu indiriyordu
 `CesiumMilkTruck.glb` indirmesi kaldırıldı. Gerçek otobüs modeli istersen
 `res/assets/models/bus.glb` (önü **+Z**) koy, kod otomatik kullanır.
@@ -224,7 +266,7 @@ res/                       <- GODOT PROJE KÖKÜ
   materials/ asphalt, concrete, wall, sky (.tres)
   shaders/   window_grid.gdshader
   assets/    textures/, environment/sky.hdr
-tools/       verify_project.py + placeholder üreticiler
+tools/       verify_project.py, physics_smoke.gd, placeholder üreticiler
 .github/workflows/build-apk.yml
 PUSH.sh      tek komutla push (PR AÇMAZ)
 HANDOVER.md  bu dosya
@@ -232,7 +274,7 @@ HANDOVER.md  bu dosya
 
 | Dosya | Satır | Görev |
 |---|---|---|
-| `bus_controller.gd` | 1387 | Otobüs fiziği + gövde + detaylı kokpit + motor sesi |
+| `bus_controller.gd` | 1438 | Otobüs fiziği + gövde + detaylı kokpit + motor sesi |
 | `ui_manager.gd` | 1113 | Mobil HUD, direksiyon, harita, hedef paneli, ayarlar |
 | `city_builder.gd` | 973 | Şehir üretimi (benzersiz durak isimleri) |
 | `traffic_ai.gd` | 823 | Trafik AI + oransal takip + hasar/yangın/patlama |
@@ -286,6 +328,9 @@ pip install --break-system-packages "gdtoolkit==4.*"
 gdparse res/scripts/*.gd && echo "TUM SCRIPTLER GECERLI"
 python3 tools/verify_project.py
 grep -n ' if .* else ' res/scripts/*.gd || echo "TEMIZ"
+
+# Fizigi DEGISTIRDIYSEN bunu da calistir (Godot indirir):
+bash RUN_PHYSICS_TEST.sh
 ```
 
 `gdparse`, Godot'un parser'ından daha müsamahakârdır (`%` içindeki ternary'yi
