@@ -45,10 +45,10 @@ godot --path res
 
 | Sistem | Durum |
 |---|---|
-| 15 GDScript dosyası | Hepsi parse ediyor (gdparse ile doğrulandı) |
+| 16 GDScript dosyası | Hepsi parse ediyor (gdparse ile doğrulandı) |
 | CI / APK build | ✅ Çalışıyor |
 | APK boyutu | ~58 MB |
-| `python3 tools/verify_project.py` | **123/123 geçiyor** |
+| `python3 tools/verify_project.py` | **142/142 geçiyor** |
 | Ana menü | ✅ |
 | Gerçek yükleme ekranı | ✅ (sahte değil, ölçülü ilerleme) |
 | Grafik ayarları | ✅ `user://settings.cfg` |
@@ -129,6 +129,70 @@ grubuna saygı duyar (ayar paneli açıkken arkası tıklanmaz).
 Menüde `_make_button()`, HUD'da `_make_touch_button()` fabrikalarından geç.
 `verify_project.py` içindeki `check_ui_contract()` bunu zorunlu kılar.
 
+### 3.11 Otobüs "maksimum 1 km/h"de kilitleniyordu
+
+Kapı kilidi şöyleydi: `if doors_open and speed_kmh > 1.0: brake = 25`.
+Kapılar **varsayılan olarak açık**, dolayısıyla otobüs 1 km/h'yi geçer geçmez
+fren devreye giriyor, 6800 N'luk itiş bunu yenemiyordu → hız **tam 1'de
+(ya da 0'da) kilitleniyordu.**
+
+**Düzeltme:** kilit artık `engine_force`'u sıfırlıyor (gerçek otobüs kapısı
+açıkken hareket etmez) ve "Close the doors before driving off" uyarısı
+basıyor. **Kapı kilidine fren ekleme — eşiğin kendisi tuzağa dönüşür.**
+
+### 3.12 Korkunç yavaş hızlanma
+
+Üç ayrı hata üst üste binmişti:
+- Sadece arka aks `use_as_traction` → 3400 N × 2 tekerlek ÷ 10 t = **0,68 m/s²**
+- `wheel_friction_slip` 4.0/3.6 (Godot varsayılanı 10.5) → lastik patinaj yapıyor
+- Süspansiyon: `stiffness=25` (dokümana göre <50 arazi aracı),
+  `damping 3.0/4.0` (doküman ~0.3/0.5), `max_force=90000` (mass/4'ün ~36 katı,
+  tavsiye 3-4 kat)
+
+**Düzeltme:** 4 tekerlek çekiş, 6000 N (**2,4 m/s²**), grip 9.0-10.5,
+süspansiyon dokümana uygun. Ayrıca kuadratik hava direnci eklendi.
+
+⚠️ `verify_project.py` motor gücünü **iki yönden** sınırlar: 2,0 m/s² altı
+"sürünüyor", 3,5 m/s² üstü "10 tonluk otobüs için fazla atik" der.
+
+### 3.13 Trafik arabası çarpınca yanmıyordu
+
+Hasar `traffic_ai._detect_collisions()` içindeydi ve `get_slide_collision()`
+okuyordu. **CharacterBody3D yalnızca KENDİ `move_and_slide()`'ının ürettiği
+teması görür.** Otobüsün çarptığı araba genelde duruyordu → hiç temas
+üretmiyor → hiç hasar almıyordu. Yani hasar, kurbanın otobüse çarpmasına
+bağlıydı; tam tersi olması gerekirken.
+
+**Düzeltme:** Momentumu olan taraf (otobüs) raporluyor:
+`bus_controller._report_crashes()` → `traffic_ai.take_external_hit()`,
+kütle farkı için 4,5 kat ağırlıklandırma.
+
+### 3.14 Trafik "salaktı"
+
+`_update_blocked()` tek boolean'dı ve ışın arabanın **merkezinden** (kendi
+4,3 m gövdesinin içinden) 9 m atılıyordu. Ya tam gaz ya tam duruş.
+
+**Düzeltme:** ışın tampondan başlıyor, 14 m, `add_exception(self)`,
+ve `_gap_ratio` ile hız oransal ölçekleniyor. Fren (16) gazdan (5.5) sert.
+
+### 3.15 Durak isimleri çakışıyordu
+
+24 durak ama 8 isim vardı: `STOP_NAMES[i % 8]` → üç ayrı yer "Riverside".
+Harita ve bilet sistemi durakları **isimle** aradığı için yanlış hedefi
+gösterebilirdi. Artık `_unique_stop_name()` benzersiz isim üretiyor
+("Riverside", "Riverside North", "Riverside East"). Doğrulandı: 24/24 benzersiz.
+
+### 3.16 1. şahıs camı opaktı
+
+Üç hata üst üste:
+1. Alfa 0,62 (dışarıdan bakmak için uygun, içinden bakmak için değil)
+2. `metallic=0.9` → karanlık kabini aynalıyordu
+3. **`WindshieldFrame`**: tüm açıklığı kaplayan **opak** kutu, camdan 6 cm önde
+
+**Düzeltme:** çerçeve dört ince ray + A-direği oldu (ortası gerçekten boş),
+cam kendi `_windshield_mat()` materyalini kullanıyor (alfa 0,10, metallic 0).
+⚠️ Tek parça `WindshieldFrame` kutusunu geri koyma — doğrulama reddeder.
+
 ### 3.8 CI süt kamyonu indiriyordu
 `CesiumMilkTruck.glb` indirmesi kaldırıldı. Gerçek otobüs modeli istersen
 `res/assets/models/bus.glb` (önü **+Z**) koy, kod otomatik kullanır.
@@ -156,7 +220,7 @@ res/                       <- GODOT PROJE KÖKÜ
   project.godot            autoload: GameState, Settings
   export_presets.cfg       Android preset
   scenes/    Main, Bus, World, BusStop, TrafficCar, HUD
-  scripts/   15 dosya
+  scripts/   16 dosya
   materials/ asphalt, concrete, wall, sky (.tres)
   shaders/   window_grid.gdshader
   assets/    textures/, environment/sky.hdr
@@ -168,33 +232,47 @@ HANDOVER.md  bu dosya
 
 | Dosya | Satır | Görev |
 |---|---|---|
-| `bus_controller.gd` | 1005 | Otobüs fiziği + gövde modeli + motor sesi |
-| `ui_manager.gd` | 959 | Mobil HUD, dönen direksiyon, ayarlar, FPS |
-| `city_builder.gd` | 952 | Şehir üretimi |
-| `traffic_ai.gd` | 762 | Trafik AI + hasar/yangın/patlama |
-| `passenger_system.gd` | 427 | Durak mantığı |
-| `loading_screen.gd` | 376 | Gerçek yükleme ekranı |
+| `bus_controller.gd` | 1387 | Otobüs fiziği + gövde + detaylı kokpit + motor sesi |
+| `ui_manager.gd` | 1113 | Mobil HUD, direksiyon, harita, hedef paneli, ayarlar |
+| `city_builder.gd` | 973 | Şehir üretimi (benzersiz durak isimleri) |
+| `traffic_ai.gd` | 823 | Trafik AI + oransal takip + hasar/yangın/patlama |
+| `passenger_system.gd` | 453 | Durak mantığı + hedef durak biletleme |
+| `loading_screen.gd` | 380 | Gerçek yükleme ekranı |
 | `fuel_system.gd` | 359 | Yakıt istasyonu |
 | `main.gd` | 343 | Menü → yükleme → oyun akışı |
 | `settings.gd` | 273 | Kalıcı grafik ayarları (autoload) |
-| `main_menu.gd` | 240 | Ana menü |
+| `main_menu.gd` | 258 | Ana menü |
+| `game_state.gd` | 252 | Ekonomi/yakıt/yolcu + durak kaydı (autoload) |
+| `camera_system.gd` | 240 | 3 kamera modu (iç kamera: sallantı + yalpalama) |
+| `mini_map.gd` | 214 | Navigasyon haritası (hedef durakları gösterir) |
 | `day_night_cycle.gd` | 204 | 5 dk gece/gündüz |
-| `camera_system.gd` | 197 | 3 kamera modu |
-| `game_state.gd` | 157 | Ekonomi/yakıt/yolcu (autoload) |
 | `touch_button.gd` | 126 | Dokunma alan Button (bkz. 3.10) |
 | `street_lamp.gd` | 19 | Sokak lambası |
-| `touch_button.gd` | 130 | Dokunma alan Button (bkz. 3.10) |
 
 ---
 
 ## 6. OYUN İÇERİĞİ
 
-- **Yolcular:** Önce inen sonra binen. 24 durak. 10-50 coin/yolcu. Kapasite 24.
+- **Yolcular:** Önce inen sonra binen. 24 durak (benzersiz isimli).
+  Her yolcu **gerçek bir hedef durak** satın alır (`GameState.destinations`),
+  10-50 coin/yolcu, kapasite 24.
+- **Navigasyon:** Sol üstte kuzey-yukarı mini harita — sokak ızgarası, tüm
+  duraklar (beyaz), **hedef duraklar (nabız atan camgöbeği)**, ekran dışı
+  hedefler kenara sabitlenir, en yakın hedefe yön çizgisi. Altında metin
+  paneli: "DROP OFF: Riverside — 3 aboard — 84 m".
 - **Ekonomi:** 500 coin başlangıç.
-- **Yakıt:** 300 L, istasyonda 1.4 coin/L.
+- **Yakıt:** 300 L, istasyonda 1.4 coin/L. Tam gazda ~2,6 dk, şehir içi ~3,7 dk.
+- **Sürüş:** 10 t, 4 tekerlek çekiş, 2,4 m/s². **Kapı açıkken hareket etmez**
+  (gaz kesilir + uyarı). Kuadratik hava direnci üst hızı oturtur.
 - **Gece/gündüz:** 5 dk döngü; lambalar, pencereler, farlar tepki verir.
-- **Trafik:** Döngüsel AI arabalar, çarpışma → hasar → yangın → patlama → 6 sn sonra respawn.
-- **Kameralar:** Takip (anti-clip raycast), iç mekân, tepeden ortografik.
+- **Trafik:** Oransal takip mesafesi (14 m ışın, kademeli yavaşlama).
+  Çarpışma → hasar → yangın → patlama → 6 sn sonra respawn.
+  Çarpışmayı **otobüs raporlar** (bkz. 3.13).
+- **Kameralar:** Takip (anti-clip raycast), **detaylı kokpit**, tepeden ortografik.
+  İç kamera: gerçek göz noktası, 78 FOV, virajda yalpalama, motor sallantısı.
+- **Kokpit:** Sarmal torpido, kapaklı gösterge paneli, **canlı ibreli
+  hız/devir saati**, MFD, direksiyonla dönen üç kollu simit, kolonlar,
+  pedallar, vites, el freni, havalı koltuk, güneşlik, ayna, bilet tepsisi.
 - **Kontroller:** Sol dönen direksiyon, sağ gaz/fren, HORN/DOOR/CAMERA/LIGHTS.
   Çoklu dokunma çalışır. Klavye: A/D, W, S, H, E, C, L.
 
