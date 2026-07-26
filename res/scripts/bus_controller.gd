@@ -494,11 +494,25 @@ func _add_cylinder(parent: Node3D, node_name: String, radius: float, height: flo
 # ---------------------------------------------------------------------------
 
 func _build_collision() -> void:
+	## GROUND CLEARANCE IS PART OF THE HANDLING. Read before editing.
+	##
+	## Wheel centres sit at y = -0.62 with a 0.52 m radius, so the tyres touch
+	## the road at y = -1.14. The body then sags about 0.09 m onto its springs.
+	##
+	## The box used to be 2.9 m tall centred at y = 0.35, putting its underside
+	## at -1.10: only 4 cm above the tyre contact patch, which the static sag
+	## alone pushed 5 cm UNDERGROUND. The hull scraped the tarmac, the road
+	## carried the bus instead of the wheels, and with no load on the tyres
+	## there was no traction: the throttle did nothing and speed stayed at 0.
+	##
+	## 2.5 m tall centred at 0.55 puts the underside at -0.70, giving 44 cm of
+	## clearance -- 35 cm even after sag. The hull mesh is unchanged; this is
+	## only the physics proxy.
 	var shape: CollisionShape3D = CollisionShape3D.new()
 	var box: BoxShape3D = BoxShape3D.new()
-	box.size = Vector3(2.55, 2.9, BODY_LENGTH)
+	box.size = Vector3(2.55, 2.5, BODY_LENGTH)
 	shape.shape = box
-	shape.position = Vector3(0.0, 0.35, 0.0)
+	shape.position = Vector3(0.0, 0.55, 0.0)
 	shape.name = "BodyCollision"
 	add_child(shape)
 
@@ -532,18 +546,33 @@ func _build_wheels() -> void:
 		# 10 t body that is not enough grip to put the engine force on the
 		# road: the tyres slipped instead of accelerating the bus.
 		wheel.wheel_friction_slip = 9.0
-		# Docs: stiffness under 50 is an off-road setting. A loaded coach on
-		# tarmac sits much firmer, and the soft springs were letting the body
-		# wallow and sap drive.
-		wheel.suspension_stiffness = 70.0
+
+		# SUSPENSION - THE NUMBERS HERE ARE LOAD-BEARING, DO NOT "TIDY" THEM.
+		#
+		# The bus weighs 10000 kg * 9.8 = 98000 N, i.e. 24500 N on each wheel
+		# just standing still.
+		#
+		# A previous pass set max_force to 12000 and stiffness to 70 after
+		# misreading the docs' "a quarter of the mass" as 2500 (that is the
+		# MASS in kg / 4, not the WEIGHT in newtons). The springs could then
+		# carry 4 * 12000 = 48000 N, only 49% of the bus. The chassis sank
+		# through its own travel, the body dragged on the tarmac and the
+		# wheels barely touched the road, so engine force went nowhere and
+		# the speedometer read 0 no matter how long the throttle was held.
+		#
+		# stiffness is N/mm, so static sag = 24500 / (stiffness * 1000):
+		#     70 N/mm  -> 35.0 cm sag   (travel is 28 cm: bottomed out)
+		#    260 N/mm  ->  9.4 cm sag   (a third of travel: correct)
+		wheel.suspension_stiffness = 260.0
 		wheel.suspension_travel = 0.28
-		# Docs: should exceed mass/4 (2500 N), ideally 3-4x. 90000 was ~36x,
-		# which made the springs effectively rigid.
-		wheel.suspension_max_force = 12000.0
-		# Docs: compression ~0.3, relaxation slightly higher. 3.0 / 4.0 was an
-		# order of magnitude too much and behaved like a locked strut.
-		wheel.damping_compression = 0.4
-		wheel.damping_relaxation = 0.6
+		# Docs: "should be higher than a quarter of the mass ... good results
+		# are often obtained by 3x to 4x this number". A quarter of the weight
+		# is 24500 N, so 3.5x that.
+		wheel.suspension_max_force = 85000.0
+		# Docs: compression ~0.3, relaxation slightly higher. Scaled up for a
+		# spring this stiff, or a 10 t body oscillates for a long time.
+		wheel.damping_compression = 0.5
+		wheel.damping_relaxation = 0.8
 		if not is_front:
 			# Slightly more grip at the driven rear axle.
 			wheel.wheel_friction_slip = 10.5
@@ -618,17 +647,20 @@ func _build_coach_bus() -> void:
 	root.name = "BusBody"
 	add_child(root)
 
-	# --- livery colours (ETS-style intercity coach) ---
-	var body_mat: StandardMaterial3D = _mat(Color(0.93, 0.94, 0.96), 0.55, 0.22)
+	# --- livery colours ---
+	# Deep yellow coach with a black glazing band and skirt, the classic
+	# intercity look the player asked for.
+	var body_mat: StandardMaterial3D = _mat(Color(0.96, 0.74, 0.06), 0.45, 0.18)
 	body_mat.clearcoat_enabled = true
-	body_mat.clearcoat = 0.85
-	body_mat.clearcoat_roughness = 0.08
+	body_mat.clearcoat = 0.95
+	body_mat.clearcoat_roughness = 0.04
 
-	var accent_mat: StandardMaterial3D = _mat(Color(0.06, 0.28, 0.62), 0.65, 0.20)
+	# Dark graphite band that ties the window line together.
+	var accent_mat: StandardMaterial3D = _mat(Color(0.07, 0.07, 0.09), 0.55, 0.24)
 	accent_mat.clearcoat_enabled = true
-	accent_mat.clearcoat = 0.8
+	accent_mat.clearcoat = 0.9
 
-	var skirt_mat: StandardMaterial3D = _mat(Color(0.09, 0.10, 0.12), 0.45, 0.45)
+	var skirt_mat: StandardMaterial3D = _mat(Color(0.07, 0.07, 0.08), 0.45, 0.45)
 	var trim_mat: StandardMaterial3D = _mat(Color(0.10, 0.10, 0.12), 0.7, 0.3)
 	var chrome_mat: StandardMaterial3D = _mat(Color(0.86, 0.88, 0.92), 1.0, 0.10)
 	var glass_mat: StandardMaterial3D = _glass_mat()
@@ -902,7 +934,14 @@ func _build_wheel_arches(root: Node3D, skirt_mat: StandardMaterial3D) -> void:
 
 
 func _build_mirrors(root: Node3D, trim_mat: StandardMaterial3D) -> void:
-	var mirror_mat: StandardMaterial3D = _mat(Color(0.75, 0.79, 0.85), 1.0, 0.05)
+	## Coach mirrors: tall body-coloured housings on arms that reach FORWARD
+	## past the windscreen, which is the silhouette people recognise on an
+	## intercity bus.
+	var mirror_mat: StandardMaterial3D = _mat(Color(0.72, 0.77, 0.84), 1.0, 0.04)
+	var arm_mat: StandardMaterial3D = _mat(Color(0.96, 0.74, 0.06), 0.45, 0.20)
+	arm_mat.clearcoat_enabled = true
+	arm_mat.clearcoat = 0.9
+
 	var sides: Array[float] = [-1.0, 1.0]
 	var i: int = 0
 	while i < sides.size():
@@ -911,12 +950,24 @@ func _build_mirrors(root: Node3D, trim_mat: StandardMaterial3D) -> void:
 		if side > 0.0:
 			label = "L"
 
-		_add_cylinder(root, "MirrorArm_" + label, 0.035, 0.55,
-			Vector3(side * 1.5, 1.15, FRONT_Z - 0.55), trim_mat, Vector3(0, 0, 90), 8)
-		_add_box(root, "MirrorHousing_" + label, Vector3(0.10, 0.62, 0.26),
-			Vector3(side * 1.76, 0.92, FRONT_Z - 0.55), trim_mat, Vector3.ZERO)
-		_add_box(root, "Mirror_" + label, Vector3(0.04, 0.54, 0.20),
-			Vector3(side * 1.80, 0.92, FRONT_Z - 0.55), mirror_mat, Vector3.ZERO)
+		# horizontal stalk out from the A-pillar
+		_add_cylinder(root, "MirrorArm_" + label, 0.038, 0.42,
+			Vector3(side * 1.42, 1.28, FRONT_Z - 0.30), arm_mat,
+			Vector3(0, 0, 90), 10)
+		# vertical riser, angled slightly forward like the real thing
+		_add_cylinder(root, "MirrorRiser_" + label, 0.036, 0.46,
+			Vector3(side * 1.62, 1.12, FRONT_Z - 0.22), arm_mat,
+			Vector3(14, 0, 0), 10)
+		# main mirror head
+		_add_box(root, "MirrorHousing_" + label, Vector3(0.13, 0.66, 0.24),
+			Vector3(side * 1.66, 0.86, FRONT_Z - 0.16), arm_mat, Vector3(0, 6, 0))
+		_add_box(root, "Mirror_" + label, Vector3(0.03, 0.58, 0.19),
+			Vector3(side * 1.72, 0.86, FRONT_Z - 0.15), mirror_mat, Vector3(0, 6, 0))
+		# small wide-angle spotter mirror underneath
+		_add_box(root, "MirrorSpotter_" + label, Vector3(0.11, 0.20, 0.17),
+			Vector3(side * 1.64, 0.44, FRONT_Z - 0.16), arm_mat, Vector3(0, 6, 0))
+		_add_box(root, "MirrorSpotterGlass_" + label, Vector3(0.03, 0.16, 0.13),
+			Vector3(side * 1.70, 0.44, FRONT_Z - 0.15), mirror_mat, Vector3(0, 6, 0))
 		i += 1
 
 

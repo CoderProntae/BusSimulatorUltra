@@ -149,6 +149,23 @@ jobs:
             exit 1
           fi
           echo "project booted with no script errors"
+      - name: Physics smoke test (the bus must actually move)
+        run: |
+          set -e
+          # The bus once shipped stuck at 0 km/h: the suspension could carry
+          # only 49% of its weight and the collision box sat below the tyres,
+          # so the hull rested on the road and the wheels had no load. Every
+          # static check passed. This drives the real bus on a real floor and
+          # fails the build if the throttle does nothing.
+          ./godot --headless --path res --script ../tools/physics_smoke.gd 2>&1 | tee physics.log
+          if grep -q "PHYSICS SMOKE TEST FAILED" physics.log; then
+            echo "FAILED: the bus does not drive correctly"
+            exit 1
+          fi
+          if ! grep -q "PHYSICS SMOKE TEST PASSED" physics.log; then
+            echo "FAILED: the physics smoke test did not report a result"
+            exit 1
+          fi
 
       - name: Export
         run: |

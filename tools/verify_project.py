@@ -291,6 +291,123 @@ def check_gameplay_contract():
     else:
         ok("all four wheels provide traction")
 
+    check_suspension_physics(bus, bus_code)
+
+
+def check_suspension_physics(bus, bus_code):
+    """The bus once read 0 km/h no matter what, because the suspension could
+    not hold it up and the collision box was underground. Both are pure
+    arithmetic, so both are checked as arithmetic rather than by eyeballing
+    the constants."""
+    GRAVITY = 9.8
+
+    def const(pattern, default=None):
+        m = re.search(pattern, bus_code)
+        if m:
+            return float(m.group(1))
+        return default
+
+    mass = const(r"\bmass = ([0-9.]+)")
+    if mass is None:
+        err("bus_controller.gd: mass not found; cannot check the suspension")
+        return
+
+    weight = mass * GRAVITY
+    per_wheel = weight / 4.0
+
+    max_force = const(r"wheel\.suspension_max_force = ([0-9.]+)")
+    if max_force is None:
+        err("bus_controller.gd: suspension_max_force not found")
+    else:
+        carried = max_force * 4.0
+        if carried < weight:
+            err(
+                "suspension carries only " + str(int(carried)) + " N of the "
+                + str(int(weight)) + " N bus ("
+                + str(int(carried / weight * 100)) + "%): the chassis sinks "
+                "to the road, the wheels lose load and the bus cannot move"
+            )
+        elif max_force < per_wheel * 2.0:
+            warn(
+                "suspension_max_force is only "
+                + str(round(max_force / per_wheel, 1))
+                + "x the per-wheel load; docs recommend 3-4x"
+            )
+        else:
+            ok(
+                "suspension carries " + str(round(carried / weight, 1))
+                + "x the bus weight (" + str(round(max_force / per_wheel, 1))
+                + "x per wheel)"
+            )
+
+    # Static sag must fit inside the available travel.
+    stiffness = const(r"wheel\.suspension_stiffness = ([0-9.]+)")
+    travel = const(r"wheel\.suspension_travel = ([0-9.]+)")
+    sag = None
+    if stiffness is not None and travel is not None and stiffness > 0.0:
+        # suspension_stiffness is N/mm, so N/m is stiffness * 1000.
+        sag = per_wheel / (stiffness * 1000.0)
+        if sag >= travel:
+            err(
+                "static sag is " + str(round(sag * 100, 1)) + " cm but travel "
+                "is only " + str(round(travel * 100, 1))
+                + " cm: the suspension bottoms out under the bus's own weight"
+            )
+        elif sag > travel * 0.6:
+            warn(
+                "static sag uses " + str(int(sag / travel * 100))
+                + "% of the travel; little room left for bumps"
+            )
+        else:
+            ok(
+                "static sag " + str(round(sag * 100, 1)) + " cm of "
+                + str(round(travel * 100, 1)) + " cm travel"
+            )
+
+    # Ground clearance: the collision box must stay above the tyres, even
+    # after the body has settled onto its springs.
+    wheel_y = None
+    m = re.search(r"Vector3\(-?[0-9.]+, (-[0-9.]+), -?[0-9.]+\),\s*\n\s*Vector3\(", bus_code)
+    wheel_block = re.search(
+        r"var positions: Array\[Vector3\] = \[(.*?)\]", bus_code, re.S)
+    if wheel_block:
+        ys = re.findall(r"Vector3\(-?[0-9.]+, (-?[0-9.]+),", wheel_block.group(1))
+        if ys:
+            wheel_y = float(ys[0])
+    radius = const(r"wheel\.wheel_radius = ([0-9.]+)")
+
+    box_h = const(r"box\.size = Vector3\([0-9.]+, ([0-9.]+),")
+    box_y = const(r"shape\.position = Vector3\(0\.0, ([0-9.]+), 0\.0\)")
+
+    if None in (wheel_y, radius, box_h, box_y):
+        warn("could not read the collision box / wheel geometry")
+        return
+
+    tyre_bottom = wheel_y - radius
+    box_bottom = box_y - box_h / 2.0
+    clearance = box_bottom - tyre_bottom
+    settled = clearance
+    if sag is not None:
+        settled = clearance - sag
+
+    if settled <= 0.0:
+        err(
+            "collision box sits " + str(round(-settled * 100, 1))
+            + " cm BELOW the tyre contact patch once the bus settles: the "
+            "hull rests on the road, the wheels carry no load and the "
+            "throttle does nothing"
+        )
+    elif settled < 0.12:
+        warn(
+            "only " + str(round(settled * 100, 1))
+            + " cm of ground clearance after sag; the hull may scrape"
+        )
+    else:
+        ok(
+            "ground clearance " + str(round(settled * 100, 1))
+            + " cm after sag"
+        )
+
     # 3) crash reporting
     if "_report_crashes" in bus and "take_external_hit" in bus:
         ok("bus reports collisions to traffic (fire/explosion can trigger)")
